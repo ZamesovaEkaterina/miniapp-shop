@@ -181,3 +181,12 @@ start().catch(err => {
   console.error('Fatal start error:', err);
   process.exit(1);
 });
+// DEBUG: кто я (видно только из Telegram Mini App)
+app.post('/api/whoami', (req, res) => {
+  const { initData } = req.body || {};
+  const v = validateInitData(initData);
+  if (!v.ok) return res.status(401).json({ ok:false, error:'initData invalid' });
+  const params = new URLSearchParams(initData);
+  const user = JSON.parse(params.get('user') || '{}');
+  res.json({ ok:true, user });
+});
