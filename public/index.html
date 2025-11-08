@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Mini Shop</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, 
+sans-serif; margin:0; }
+    header { position: sticky; top:0; background:#fff; border-bottom:1px 
+solid #eee; padding:12px 16px; }
+    .row { display:flex; gap:12px; flex-wrap:wrap; padding:12px 16px; }
+    .card { border:1px solid #eee; border-radius:10px; padding:12px; 
+width:calc(50% - 12px); box-sizing:border-box; }
+    .card h4 { margin:6px 0; font-size:16px; }
+    .price { font-weight:600; }
+    .actions { display:flex; gap:8px; margin-top:8px; }
+    .pill { border:1px solid #ddd; border-radius:999px; padding:6px 10px; 
+cursor:pointer; }
+    .cart { position:fixed; bottom:0; left:0; right:0; border-top:1px 
+solid #eee; background:#fff; padding:10px 16px; display:flex; 
+justify-content:space-between; align-items:center; }
+    .hidden { display:none; }
+    label { display:block; margin:8px 0 4px; font-size:14px; }
+    select, input { width:100%; padding:10px; border:1px solid #ddd; 
+border-radius:8px; }
+    #screen-checkout, #screen-profile { padding:12px 16px; }
+    nav { display:flex; gap:8px; padding:8px 16px; border-top:1px solid 
+#eee; }
+    nav button { flex:1; padding:10px; }
+  </style>
+</head>
+<body>
+  <header>
+    <strong>Mini Shop</strong>
+    <div id="tg-hint" style="font-size:12px; color:#666"></div>
+  </header>
+
+  <div id="screen-catalog">
+    <div class="row" id="categories"></div>
+    <div class="row" id="products"></div>
+  </div>
+
+  <div id="screen-checkout" class="hidden">
+    <h3>Оформление</h3>
+
+    <label>Зона/город доставки</label>
+    <select id="delivery-zone">
+      <option value="pickup">Самовывоз (0 ₽)</option>
+      <option value="zone1">Зона 1 (+100 ₽)</option>
+      <option value="zone2">Зона 2 (+200 ₽)</option>
+    </select>
+
+    <label>Способ</label>
+    <select id="delivery-method">
+      <option value="courier">Курьер</option>
+      <option value="pickup">Самовывоз</option>
+    </select>
+
+    <div id="address-wrap">
+      <label>Адрес (для курьера)</label>
+      <input id="address" placeholder="Улица, дом, квартира"/>
+    </div>
+
+    <h4>Итого: <span id="total-sum">0</span> ₽</h4>
+    <button id="btn-place" class="pill">Отправить заказ</button>
+  </div>
+
+  <div id="screen-profile" class="hidden">
+    <h3>Личный кабинет</h3>
+    <div id="profile"></div>
+    <h4>Заказы</h4>
+    <div id="orders"></div>
+  </div>
+
+  <div class="cart" id="cart-bar">
+    <div><strong>Корзина:</strong> <span id="cart-count">0</span> 
+поз.</div>
+    <div><strong><span id="cart-sum">0</span> ₽</strong></div>
+    <div class="actions">
+      <button id="to-checkout" class="pill">Оформить</button>
+      <button id="to-profile" class="pill">Профиль</button>
+    </div>
+  </div>
+
+  <nav>
+    <button id="tab-catalog">Каталог</button>
+    <button id="tab-checkout">Оформление</button>
+    <button id="tab-profile">Профиль</button>
+  </nav>
+
+  <script>
+    const tg = window.Telegram?.WebApp;
+    if (tg) { tg.expand(); document.getElementById('tg-hint').textContent 
+= 'Mini App открыт внутри Telegram'; }
+    else { document.getElementById('tg-hint').textContent = 'Запусти через 
+Telegram, чтобы видеть профиль'; }
+
+    const state = { user:null, categories:[], products:[], cart:[], 
+deliveryFee:0 };
+
+    const scrCatalog = document.getElementById('screen-catalog');
+    const scrCheckout = document.getElementById('screen-checkout');
+    const scrProfile = document.getElementById('screen-profile');
+    function show(screen){ 
+[scrCatalog,scrCheckout,scrProfile].forEach(el=>el.classList.add('hidden')); 
+screen.classList.remove('hidden'); }
+
+    document.getElementById('tab-catalog').onclick = () => 
+show(scrCatalog);
+    document.getElementById('tab-checkout').onclick = () => 
+show(scrCheckout);
+    document.getElementById('tab-profile').onclick = () => 
+show(scrProfile);
+
+    async function bootstrap(){
+      const initData = tg?.initData || '';
+      const res = await fetch('/api/bootstrap',{ method:'POST', 
+headers:{'Content-Type':'application/json'}, body: 
+JSON.stringify({initData}) });
+      const data = await res.json();
+      state.user = data.user;
+      state.categories = data.categories;
+      state.products = data.products;
+      renderCategories();
+      renderProducts(state.products);
+      renderProfile(data.user);
+      renderOrders(data.orders || []);
+    }
+
+    function renderCategories(){
+      const wrap = document.getElementById('categories'); wrap.innerHTML = 
+'';
+      state.categories.forEach(c=>{
+        const d = document.createElement('div');
+        d.className='pill'; d.textContent=c.name;
+        
+d.onclick=()=>renderProducts(state.products.filter(p=>p.categoryId===c.id));
+        wrap.appendChild(d);
+      });
+      const all = document.createElement('div'); all.className='pill'; 
+all.textContent='Все';
+      all.onclick=()=>renderProducts(state.products); wrap.prepend(all);
+    }
+
+    function renderProducts(list){
+      const wrap=document.getElementById('products'); wrap.innerHTML='';
+      list.forEach(p=>{
+        const card=document.createElement('div'); card.className='card';
+        card.innerHTML=`
+          <h4>${p.name}</h4>
+          <div class="price">${p.price} ₽</div>
+          <div 
+style="font-size:12px;color:#666">${p.categoryName||''}</div>
+          <div class="actions">
+            <button class="pill" data-id="${p.id}">В корзину</button>
+          </div>`;
+        card.querySelector('button').onclick=()=>addToCart(p);
+        wrap.appendChild(card);
+      });
+    }
+
+    function addToCart(p){
+      const item=state.cart.find(i=>i.id===p.id);
+      if(item) item.qty++; else 
+state.cart.push({id:p.id,name:p.name,price:p.price,qty:1});
+      updateCartBar();
+    }
+    function updateCartBar(){
+      const count=state.cart.reduce((s,i)=>s+i.qty,0);
+      const 
+sum=state.cart.reduce((s,i)=>s+i.qty*i.price,0)+state.deliveryFee;
+      document.getElementById('cart-count').textContent=count;
+      document.getElementById('cart-sum').textContent=sum;
+      document.getElementById('total-sum').textContent=sum;
+    }
+
+    const selectZone=document.getElementById('delivery-zone');
+    const selectMethod=document.getElementById('delivery-method');
+    const addressWrap=document.getElementById('address-wrap');
+    function recalcDelivery(){
+      const zone=selectZone.value; const method=selectMethod.value;
+      addressWrap.style.display=(method==='courier')?'block':'none';
+      let fee=0; if(method==='courier'){ if(zone==='zone1') fee=100; 
+if(zone==='zone2') fee=200; }
+      state.deliveryFee=fee; updateCartBar();
+    }
+    selectZone.onchange=recalcDelivery; 
+selectMethod.onchange=recalcDelivery; recalcDelivery();
+
+    document.getElementById('btn-place').onclick=async()=>{
+      const initData=tg?.initData||'';
+      const payload={ initData, items:state.cart, delivery:{
+        method:selectMethod.value, zone:selectZone.value, 
+address:document.getElementById('address').value||null
+      }};
+      const res=await fetch('/api/orders',{ method:'POST', 
+headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload) 
+});
+      const data=await res.json();
+      if(data.ok){ alert('Заказ создан #'+data.orderNumber); 
+state.cart=[]; updateCartBar(); show(scrProfile); await loadOrders(); }
+      else { alert('Ошибка: '+data.error); }
+    };
+    document.getElementById('to-checkout').onclick=()=>show(scrCheckout);
+    document.getElementById('to-profile').onclick=()=>show(scrProfile);
+
+    async function loadOrders(){ const r=await fetch('/api/orders'); const 
+d=await r.json(); renderOrders(d.orders||[]); }
+    function renderProfile(user){ const 
+el=document.getElementById('profile'); if(!user){ el.textContent='Гость'; 
+return; }
+      el.innerHTML=`<div>Привет, ${user.first_name||'друг'}!</div><div 
+style="font-size:12px;color:#666">Ваш Telegram ID: ${user.id}</div>`;
+    }
+    function renderOrders(orders){ const 
+el=document.getElementById('orders'); el.innerHTML='';
+      orders.forEach(o=>{ const d=document.createElement('div'); 
+d.className='card';
+        d.innerHTML=`<div><strong>№${o.number}</strong> — ${o.total} ₽ — 
+${o.status}</div>
+                     <div style="font-size:12px;color:#666">${new 
+Date(o.createdAt).toLocaleString()}</div>`;
+        el.appendChild(d);
+      });
+    }
+
+    bootstrap().catch(err=>alert('Bootstrap error: '+err.message));
+  </script>
+</body>
+</html>
