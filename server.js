@@ -1,5 +1,13 @@
 // server.js — минимальный Express-сервер для Mini App + iiko-заготовки (без top-level await)
 require('dotenv').config();
+// === DIAG ENV ===
+function mask(s){ return s ? String(s).slice(0,4) + '…' + String(s).slice(-4) : null; }
+console.log('[ENV]', {
+  BOT_TOKEN: mask(process.env.BOT_TOKEN),
+  IIKO_API_BASE: process.env.IIKO_API_BASE || null,
+  IIKO_API_LOGIN: mask(process.env.IIKO_API_LOGIN),
+  IIKO_ORG_ID: process.env.IIKO_ORG_ID || null,
+});
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
@@ -73,8 +81,13 @@ async function fetchIikoMenu() {
 
     db.data.menu = { categories, products };
     await db.write();
+
+    // Лог успешной загрузки
+    console.log(`[iiko] loaded ${categories.length} categories, ${products.length} products`);
+
   } catch (e) {
-    console.log('iiko menu load failed, using fallback:', e.message);
+    // Лог ошибки с подробностями
+    console.error('[iiko] menu load failed', e.response?.data || e.message);
   }
 }
 
