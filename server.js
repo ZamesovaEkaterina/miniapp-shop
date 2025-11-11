@@ -185,6 +185,14 @@ async function start() {
   await fetchIikoMenu(); // если нет iiko — просто останется FALLBACK
 
   const PORT = process.env.PORT || 3000;
+  app.get('/api/menu', async (req, res) => {
+    try {
+      await db.read();
+      const menu = db.data?.menu || { categories: [], products: [] }; res.json(menu);
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+});
   app.listen(PORT, () => {
     console.log('Server on http://localhost:' + PORT);
   });
