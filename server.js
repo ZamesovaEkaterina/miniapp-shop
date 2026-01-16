@@ -1,13 +1,14 @@
 // server.js — минимальный Express-сервер для Mini App + iiko-заготовки (без top-level await)
 require('dotenv').config();
-// === DIAG ENV ===
-function mask(s){ return s ? String(s).slice(0,4) + '…' + String(s).slice(-4) : null; }
+
+function mask(s){ return s ? String(s).slice(0,4) + '...' + String(s).slice(-4) : null; }
 console.log('[ENV]', {
   BOT_TOKEN: mask(process.env.BOT_TOKEN),
   IIKO_API_BASE: process.env.IIKO_API_BASE || null,
   IIKO_API_LOGIN: mask(process.env.IIKO_API_LOGIN),
   IIKO_ORG_ID: process.env.IIKO_ORG_ID || null,
 });
+
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
@@ -21,27 +22,31 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static('public')); // отдаём фронт из /public
 
-// простая JSON-"база" (инициализируем позже)
-const db = new Low(new JSONFile('./db.json'), { users: {}, orders: [], menu: { categories: [], 
-products: [] } });
+// простая JSON-база в памяти
+const db = new Low(new JSONFile('.db.json'), { users: {}, orders: [], menu: { categories: [], products: [] } });
 
-// валидация Telegram initData (HMAC по правилу WebAppData)
+// ===== TELEGRAM INIT DATA VALIDATION =====
 function validateInitData(initData) {
   if (!initData) return { ok: false, reason: 'empty' };
-  const urlParams = new URLSearchParams(initData);
-  const hash = urlParams.get('hash');
-  urlParams.delete('hash');
+  const params = new URLSearchParams(initData);
   const data = [];
-  for (const [k, v] of urlParams.entries()) data.push(`${k}=${v}`);
+  for (const [k, v] of params.entries()) {
+    if (k === 'hash') continue;
+    data.push(`${k}=${v}`);
+  }
   data.sort();
   const dataCheckString = data.join('\n');
   const secretKey = crypto.createHmac('sha256', 'WebAppData')
-    .update(process.env.BOT_TOKEN || 'MISSING_BOT_TOKEN').digest();
-  const hmac = crypto.createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
+    .update(process.env.BOT_TOKEN || 'MISSING_BOT_TOKEN')
+    .digest();
+  const hmac = crypto.createHmac('sha256', secretKey)
+    .update(dataCheckString)
+    .digest('hex');
+  const hash = params.get('hash');
   return { ok: hmac === hash, reason: hmac === hash ? null : 'hash_mismatch' };
 }
 
-// iiko токен (можно работать и без iiko)
+// ===== IIKO TOKEN =====
 let iikoToken = null;
 let iikoTokenExp = 0;
 
@@ -49,24 +54,36 @@ async function getIikoToken() {
   const now = Date.now();
   if (iikoToken && now < iikoTokenExp) return iikoToken;
   if (!process.env.IIKO_API_LOGIN || !process.env.IIKO_API_BASE) return null;
-  const resp = await axios.post(`${process.env.IIKO_API_BASE}/api/1/access_token`, {
-    apiLogin: process.env.IIKO_API_LOGIN
-  });
-  iikoToken = resp.data.token;
-  iikoTokenExp = now + 10 * 60 * 1000; // ~10 минут
-  return iikoToken;
+  
+  try {
+    const resp = await axios.post(`${process.env.IIKO_API_BASE}/api/1/access_token`, {
+      apiLogin: process.env.IIKO_API_LOGIN
+    });
+    iikoToken = resp.data.token;
+    iikoTokenExp = now + 9 * 60 * 1000; // 9 минут (токен живёт 10)
+    console.log('[iiko] token acquired');
+    return iikoToken;
+  } catch (e) {
+    console.error('[iiko] token error', e.response?.data || e.message);
+    return null;
+  }
 }
 
+// ===== IIKO MENU =====
 async function fetchIikoMenu() {
   try {
     const token = await getIikoToken();
-    if (!token) throw new Error('No iiko token (offline)');
+    if (!token) throw new Error('No iiko token (offline mode)');
 
     const resp = await axios.post(`${process.env.IIKO_API_BASE}/api/1/nomenclature`, {
       organizationId: process.env.IIKO_ORG_ID
     }, { headers: { Authorization: `Bearer ${token}` } });
 
-    const categories = (resp.data.groups || []).map(g => ({ id: g.id, name: g.name }));
+    // Исправляем названия полей: productCategories -> категории, products -> товары
+    const categories = (resp.data.productCategories || [])
+      .filter(g => !g.isDeleted)
+      .map(g => ({ id: g.id, name: g.name }));
+    
     const products = (resp.data.products || [])
       .filter(p => !p.isDeleted)
       .map(p => ({
@@ -76,31 +93,38 @@ async function fetchIikoMenu() {
         categoryId: p.parentGroup || null,
       }));
 
+    // Добавляем categoryName к каждому товару
     const catById = Object.fromEntries(categories.map(c => [c.id, c.name]));
     products.forEach(p => p.categoryName = catById[p.categoryId] || 'Прочее');
 
     db.data.menu = { categories, products };
     await db.write();
 
-    // Лог успешной загрузки
     console.log(`[iiko] loaded ${categories.length} categories, ${products.length} products`);
+    return { categories, products };
 
   } catch (e) {
-    // Лог ошибки с подробностями
     console.error('[iiko] menu load failed', e.response?.data || e.message);
+    return null;
   }
 }
 
+// Fallback меню (на случай, если iiko недоступен)
 const FALLBACK = {
-  categories: [{ id: 'c1', name: 'Напитки' }, { id: 'c2', name: 'Закуски' }],
+  categories: [
+    { id: 'c1', name: 'Пиво' },
+    { id: 'c2', name: 'Закуски' }
+  ],
   products: [
-    { id: 'p1', name: 'Лагер 0.5', price: 250, categoryId: 'c1', categoryName: 'Напитки' },
-    { id: 'p2', name: 'IPA 0.5', price: 320, categoryId: 'c1', categoryName: 'Напитки' },
+    { id: 'p1', name: 'Лагер 0.5л', price: 250, categoryId: 'c1', categoryName: 'Пиво' },
+    { id: 'p2', name: 'IPA 0.5л', price: 320, categoryId: 'c1', categoryName: 'Пиво' },
     { id: 'p3', name: 'Начос', price: 290, categoryId: 'c2', categoryName: 'Закуски' },
   ]
 };
 
-// ===== API =====
+// ===== API ENDPOINTS =====
+
+// 1. Bootstrap: загрузить профиль + меню + заказы
 app.post('/api/bootstrap', async (req, res) => {
   const { initData } = req.body || {};
   let user = null;
@@ -110,43 +134,61 @@ app.post('/api/bootstrap', async (req, res) => {
     if (!v.ok) return res.status(401).json({ error: 'initData invalid: ' + v.reason });
     const params = new URLSearchParams(initData);
     const userRaw = params.get('user');
-    if (userRaw) user = JSON.parse(userRaw);
-    if (user) {
-      db.data.users[user.id] = db.data.users[user.id] || { id: user.id, first_name: 
-user.first_name };
-      await db.write();
+    if (userRaw) {
+      try {
+        user = JSON.parse(userRaw);
+        db.data.users[user.id] = db.data.users[user.id] || { id: user.id, first_name: user.first_name };
+        await db.write();
+      } catch (e) {
+        console.error('Parse user error', e);
+      }
     }
   }
 
   const menu = db.data.menu?.products?.length ? db.data.menu : FALLBACK;
   const orders = user ? db.data.orders.filter(o => o.userId === user.id) : [];
+  
   res.json({ user, categories: menu.categories, products: menu.products, orders });
 });
 
-app.get('/api/orders', (req, res) => {
-  res.json({ orders: db.data.orders.slice(-20) });
+// 2. Получить меню
+app.get('/api/menu', async (req, res) => {
+  try {
+    await db.read();
+    const menu = db.data?.menu || { categories: [], products: [] };
+    res.json(menu);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
+// 3. Получить заказы (последние 20 для всех, или фильтровать по userId если нужно)
+app.get('/api/orders', (req, res) => {
+  res.json({ orders: db.data.orders.slice(-20).reverse() });
+});
+
+// 4. Создать заказ
 app.post('/api/orders', async (req, res) => {
   try {
     const { initData, items, delivery } = req.body || {};
     const v = validateInitData(initData);
-    if (!v.ok) return res.status(401).json({ ok:false, error:'initData invalid' });
+    if (!v.ok) return res.status(401).json({ ok: false, error: 'initData invalid' });
 
     const params = new URLSearchParams(initData);
     const user = JSON.parse(params.get('user') || '{}');
 
     if (!Array.isArray(items) || !items.length) {
-      return res.json({ ok:false, error:'Пустая корзина' });
+      return res.json({ ok: false, error: 'Пустая корзина' });
     }
 
     const menu = db.data.menu?.products?.length ? db.data.menu : FALLBACK;
     const byId = Object.fromEntries(menu.products.map(p => [p.id, p]));
+    
     let subtotal = 0;
     const lines = [];
     for (const it of items) {
       const prod = byId[it.id];
-      if (!prod) return res.json({ ok:false, error:`Товар не найден: ${it.id}` });
+      if (!prod) return res.json({ ok: false, error: `Товар не найден: ${it.id}` });
       const qty = Math.max(1, parseInt(it.qty || 1, 10));
       subtotal += prod.price * qty;
       lines.push({ id: prod.id, name: prod.name, price: prod.price, qty });
@@ -165,49 +207,95 @@ app.post('/api/orders', async (req, res) => {
       userId: user?.id || null,
       items: lines,
       delivery: { ...delivery, fee },
-      subtotal, total,
+      subtotal,
+      total,
       status: 'created',
+      iikoSent: false,
       createdAt: Date.now()
     };
+    
     db.data.orders.push(record);
     await db.write();
 
-    res.json({ ok:true, orderNumber, total });
+    // Пытаемся отправить в iiko (асинхронно, не ждём)
+    sendOrderToIiko(record, user).catch(e => console.error('[iiko] order send failed', e));
+
+    res.json({ ok: true, orderNumber, total });
   } catch (e) {
-    console.error(e);
-    res.json({ ok:false, error:e.message });
+    console.error('[POST /api/orders] error', e);
+    res.json({ ok: false, error: e.message });
   }
 });
 
-// ===== INIT + START =====
+// ===== IIKO ORDER SEND (ASYNC) =====
+async function sendOrderToIiko(order, user) {
+  const token = await getIikoToken();
+  if (!token) {
+    console.log('[iiko] no token, skipping order send');
+    return;
+  }
+
+  try {
+    // Примерный payload для iiko (зависит от версии API)
+    // Может быть /api/1/deliveries/create или /api/1/orders/create
+    const payload = {
+      organizationId: process.env.IIKO_ORG_ID,
+      order: {
+        phone: user?.phone || '',
+        customer: {
+          name: `${user?.first_name || ''} ${user?.last_name || ''}`.trim() || 'Guest',
+          id: user?.id?.toString() || null
+        },
+        items: order.items.map(i => ({
+          productId: i.id,
+          amount: i.qty
+        })),
+        comment: `Telegram Mini App order #${order.number}, delivery: ${order.delivery?.method} (${order.delivery?.zone}), address: ${order.delivery?.address || 'N/A'}`
+      }
+    };
+
+    // Пробуем отправить (endpoint может быть /deliveries/create или /orders/create)
+    const resp = await axios.post(
+      `${process.env.IIKO_API_BASE}/api/1/deliveries/create`,
+      payload,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+
+    console.log('[iiko] order sent:', resp.data?.id);
+    // Можно сохранить iikoOrderId в нашу БД для синхронизации статусов
+  } catch (e) {
+    // Если ошибка — просто логируем (заказ уже в нашей БД)
+    console.error('[iiko] order send error', e.response?.data || e.message);
+  }
+}
+
+// ===== DEBUG =====
+app.post('/api/whoami', (req, res) => {
+  const { initData } = req.body || {};
+  const v = validateInitData(initData);
+  if (!v.ok) return res.status(401).json({ ok: false, error: 'initData invalid' });
+  const params = new URLSearchParams(initData);
+  const user = JSON.parse(params.get('user') || '{}');
+  res.json({ ok: true, user });
+});
+
+// ===== START =====
 async function start() {
   await db.read();
-  await fetchIikoMenu(); // если нет iiko — просто останется FALLBACK
+  
+  // Пытаемся загрузить меню из iiko при старте
+  const menuLoaded = await fetchIikoMenu();
+  if (!menuLoaded) {
+    console.log('[db] using FALLBACK menu');
+  }
 
   const PORT = process.env.PORT || 3000;
-  app.get('/api/menu', async (req, res) => {
-    try {
-      await db.read();
-      const menu = db.data?.menu || { categories: [], products: [] }; res.json(menu);
-    } catch (e) {
-      res.status(500).json({ error: e.message });
-    }
-});
   app.listen(PORT, () => {
-    console.log('Server on http://localhost:' + PORT);
+    console.log(`[server] listening on http://localhost:${PORT}`);
   });
 }
 
 start().catch(err => {
-  console.error('Fatal start error:', err);
+  console.error('[fatal] startup error:', err);
   process.exit(1);
-});
-// DEBUG: кто я (видно только из Telegram Mini App)
-app.post('/api/whoami', (req, res) => {
-  const { initData } = req.body || {};
-  const v = validateInitData(initData);
-  if (!v.ok) return res.status(401).json({ ok:false, error:'initData invalid' });
-  const params = new URLSearchParams(initData);
-  const user = JSON.parse(params.get('user') || '{}');
-  res.json({ ok:true, user });
 });
