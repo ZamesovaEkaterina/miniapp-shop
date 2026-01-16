@@ -114,26 +114,36 @@ show(scrCheckout);
 show(scrProfile);
 
     async function bootstrap(){
-      const initData = tg?.initData || '';
+  const initData = tg?.initData || '';
   
-  // Сначала запрашиваем bootstrap
-      const res = await fetch('/api/bootstrap',{ method:'POST', 
-      headers:{'Content-Type':'application/json'}, body: 
-      JSON.stringify({initData}) });
-      const data = await res.json();
-      state.user = data.user;
-  
-  // Затем отдельно запрашиваем меню (чтобы убедиться, что оно в БД)
+  try {
+    const res = await fetch('/api/bootstrap',{ method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({initData}) });
+    const data = await res.json();
+    state.user = data.user;
+    
+    if (!data.products || !data.products.length) {
+      console.log('No products in bootstrap, fetching from /api/menu');
       const menuRes = await fetch('/api/menu');
       const menu = await menuRes.json();
-      state.categories = menu.categories || data.categories || [];
-      state.products = menu.products || data.products || [];
-  
-      renderCategories();
-      renderProducts(state.products);
-      renderProfile(data.user);
-      renderOrders(data.orders || []);
+      state.categories = menu.categories || [];
+      state.products = menu.products || [];
+      console.log('Loaded menu from /api/menu:', state.products.length, 'products');
+    } else {
+      state.categories = data.categories;
+      state.products = data.products;
     }
+    
+    renderCategories();
+    renderProducts(state.products);
+    renderProfile(data.user);
+    renderOrders(data.orders || []);
+    
+    console.log('Bootstrap complete:', state.products.length, 'products loaded');
+  } catch (err) {
+    console.error('Bootstrap error:', err);
+    alert('Ошибка загрузки: ' + err.message);
+  }
+
 
 
     function renderCategories(){
