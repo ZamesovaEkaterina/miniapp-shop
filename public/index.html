@@ -115,18 +115,26 @@ show(scrProfile);
 
     async function bootstrap(){
       const initData = tg?.initData || '';
+  
+  // Сначала запрашиваем bootstrap
       const res = await fetch('/api/bootstrap',{ method:'POST', 
-headers:{'Content-Type':'application/json'}, body: 
-JSON.stringify({initData}) });
+      headers:{'Content-Type':'application/json'}, body: 
+      JSON.stringify({initData}) });
       const data = await res.json();
       state.user = data.user;
-      state.categories = data.categories;
-      state.products = data.products;
+  
+  // Затем отдельно запрашиваем меню (чтобы убедиться, что оно в БД)
+      const menuRes = await fetch('/api/menu');
+      const menu = await menuRes.json();
+      state.categories = menu.categories || data.categories || [];
+      state.products = menu.products || data.products || [];
+  
       renderCategories();
       renderProducts(state.products);
       renderProfile(data.user);
       renderOrders(data.orders || []);
     }
+
 
     function renderCategories(){
       const wrap = document.getElementById('categories'); wrap.innerHTML = 
