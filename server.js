@@ -69,7 +69,7 @@ async function getIikoToken() {
   }
 }
 
-// ===== IIKO MENU (ПРАВИЛЬНЫЙ ПАРСИНГ) =====
+// ===== IIKO MENU (БЕЗ ФИЛЬТРА ПО ТИПУ!) =====
 async function fetchIikoMenu() {
   try {
     const token = await getIikoToken();
@@ -89,7 +89,7 @@ async function fetchIikoMenu() {
 
     console.log(`[iiko] Total groups: ${allGroups.length}`);
 
-    // ===== ПОЛУЧАЕМ ТОВАРЫ И ФИЛЬТРУЕМ =====
+    // ===== ПОЛУЧАЕМ ТОВАРЫ (БЕЗ ФИЛЬТРА ПО ТИПУ!) =====
     const allProducts = (resp.data.products || [])
       .filter(p => !p.isDeleted); // Не удалённые
 
@@ -98,6 +98,7 @@ async function fetchIikoMenu() {
     // ===== ПАРСИМ ТОВАРЫ: берём ПЕРВЫЙ активный сайз с ценой =====
     const products = [];
     const categoriesSet = new Set();
+    let skippedCount = 0;
 
     for (const prod of allProducts) {
       // Ищем первый активный размер с ценой
@@ -115,18 +116,23 @@ async function fetchIikoMenu() {
 
       // Если нашли активную цену — добавляем товар
       if (activePrice !== null) {
-        categoriesSet.add(prod.parentGroup || 'default');
+        const categoryId = prod.parentGroup || 'default';
+        categoriesSet.add(categoryId);
         products.push({
           id: prod.id,
           name: prod.name,
           price: Math.round(activePrice * 100) / 100,
-          categoryId: prod.parentGroup || 'default',
-          categoryName: 'Товары'
+          categoryId,
+          categoryName: 'Товары', // заполним позже
+          type: prod.type // добавим для DEBUG
         });
+      } else {
+        skippedCount++;
       }
     }
 
-    console.log(`[iiko] ✓ Filtered products with active price: ${products.length}`);
+    console.log(`[iiko] ✓ Products with active price: ${products.length}`);
+    console.log(`[iiko] ✓ Skipped (no price/not in menu): ${skippedCount}`);
 
     if (products.length === 0) {
       console.warn('[iiko] No products with active prices found, using FALLBACK');
@@ -148,6 +154,13 @@ async function fetchIikoMenu() {
     if (categories.length === 0) {
       categories.push({ id: 'default', name: 'Товары' });
     }
+
+    // DEBUG: выводим типы продуктов
+    const typesCounts = {};
+    products.forEach(p => {
+      typesCounts[p.type] = (typesCounts[p.type] || 0) + 1;
+    });
+    console.log('[iiko] Product types:', typesCounts);
 
     db.data.menu = { categories, products };
     await db.write();
@@ -348,4 +361,3 @@ start().catch(err => {
   console.error('[fatal] startup error:', err);
   process.exit(1);
 });
-
