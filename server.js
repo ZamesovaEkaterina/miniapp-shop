@@ -69,7 +69,7 @@ async function getIikoToken() {
   }
 }
 
-// ===== IIKO MENU (DEBUG: выводим ВСЕ папки) =====
+// ===== IIKO MENU (DEBUG: вся структура ответа) =====
 async function fetchIikoMenu() {
   try {
     const token = await getIikoToken();
@@ -82,87 +82,61 @@ async function fetchIikoMenu() {
       organizationId: process.env.IIKO_ORG_ID
     }, { headers: { Authorization: `Bearer ${token}` } });
 
-    // Получаем ВСЕ группы (папки)
-    const allGroups = (resp.data.productGroups || [])
-      .filter(g => !g.isDeleted)
-      .map(g => ({ id: g.id, name: g.name, parentId: g.parentGroup || null }));
+    // ===== DEBUG: ВЫВЕСТИ ВСЮSTRUCTУРУ ОТВЕТА =====
+    console.log('[iiko] ========== FULL RESPONSE STRUCTURE ==========');
+    console.log('[iiko] Response keys:', Object.keys(resp.data));
+    console.log('[iiko] Response.data:', JSON.stringify(resp.data, null, 2));
+    console.log('[iiko] ==========================================');
 
-    console.log('[iiko] ========== DEBUG: ALL GROUPS (ПАПКИ) ==========');
-    console.log('[iiko] Total groups found:', allGroups.length);
-    allGroups.forEach((g, idx) => {
-      console.log(`[iiko]   [${idx}] Name: "${g.name}" | ID: ${g.id} | ParentID: ${g.parentId}`);
-    });
-    console.log('[iiko] ============================================');
-
-    // ====== АВТОПОИСК: ищем МАКСИМАЛЬНО КОРНЕВУЮ папку (без parentId) =====
-    const rootFolders = allGroups.filter(g => !g.parentId);
-    console.log(`[iiko] Root folders (без parentId): ${rootFolders.length}`);
-    rootFolders.forEach(r => {
-      console.log(`[iiko]   - "${r.name}" (ID: ${r.id})`);
-    });
-
-    // Если нет корневых, берём первую папку
-    const targetFolder = rootFolders.length > 0 ? rootFolders[0] : allGroups[0];
-    if (!targetFolder) {
-      console.error('[iiko] No groups found at all!');
-      return null;
-    }
-
-    console.log(`[iiko] Selected target folder: "${targetFolder.name}" (ID: ${targetFolder.id})`);
-
-    // Ищем подпапки внутри выбранной папки
-    const subfolders = allGroups.filter(g => g.parentId === targetFolder.id);
-    console.log(`[iiko] Subfolders inside "${targetFolder.name}": ${subfolders.length}`);
-    subfolders.forEach(s => {
-      console.log(`[iiko]   - "${s.name}" (ID: ${s.id})`);
-    });
-
-    // Если подпапок нет, берём товары прямо из targetFolder
-    let productsParentIds;
-    if (subfolders.length > 0) {
-      productsParentIds = new Set(subfolders.map(g => g.id));
-      console.log('[iiko] Using subfolders as product parents');
+    // Проверяем что есть в ответе
+    if (resp.data.productGroups) {
+      console.log('[iiko] productGroups found:', resp.data.productGroups.length);
     } else {
-      productsParentIds = new Set([targetFolder.id]);
-      console.log('[iiko] No subfolders found, using root folder as product parent');
+      console.log('[iiko] ⚠️  productGroups NOT found');
     }
 
-    // Получаем ВСЕ товары
-    const allProducts = (resp.data.products || [])
+    if (resp.data.productCategories) {
+      console.log('[iiko] productCategories found:', resp.data.productCategories.length);
+    } else {
+      console.log('[iiko] ⚠️  productCategories NOT found');
+    }
+
+    if (resp.data.products) {
+      console.log('[iiko] products found:', resp.data.products.length);
+    } else {
+      console.log('[iiko] ⚠️  products NOT found');
+    }
+
+    // Если нет товаров, используем FALLBACK
+    if (!resp.data.products || resp.data.products.length === 0) {
+      console.log('[iiko] No products in response, using FALLBACK');
+      db.data.menu = FALLBACK;
+      await db.write();
+      return FALLBACK;
+    }
+
+    // Если есть товары, но нет групп — просто выводим товары без категоризации
+    const products = (resp.data.products || [])
       .filter(p => !p.isDeleted)
       .map(p => ({
         id: p.id,
         name: p.name,
         price: Math.round((p.price || 0) * 100) / 100,
-        categoryId: p.parentGroup || null,
+        categoryId: 'default',
+        categoryName: 'Товары'
       }));
 
-    console.log(`[iiko] Total products in nomenclature: ${allProducts.length}`);
-
-    // Фильтруем товары
-    const products = allProducts.filter(p => productsParentIds.has(p.categoryId));
-    console.log(`[iiko] Products filtered for our folders: ${products.length}`);
-
-    if (products.length === 0) {
-      console.error('[iiko] No products found after filtering!');
-      return null;
-    }
-
-    // Добавляем categoryName
-    const folderById = Object.fromEntries(allGroups.map(g => [g.id, g.name]));
-    products.forEach(p => p.categoryName = folderById[p.categoryId] || 'Прочее');
-
-    const categories = subfolders.length > 0 ? subfolders : [targetFolder];
+    const categories = [{ id: 'default', name: 'Товары' }];
 
     db.data.menu = { categories, products };
     await db.write();
 
-    console.log(`[iiko] ✓ SUCCESS: Loaded ${categories.length} categories, ${products.length} products`);
+    console.log(`[iiko] ✓ Loaded ${products.length} products`);
     return { categories, products };
 
   } catch (e) {
     console.error('[iiko] menu load failed', e.response?.data || e.message);
-    console.error('[iiko] Full error:', e);
+    console.error('[iiko] Full error stack:', e);
     return null;
   }
 }
@@ -354,4 +328,3 @@ start().catch(err => {
   console.error('[fatal] startup error:', err);
   process.exit(1);
 });
-
