@@ -69,7 +69,7 @@ async function getIikoToken() {
   }
 }
 
-// ===== IIKO MENU (загружаем товары из папки "Бургеры") =====
+// ===== IIKO MENU (загружаем ВСЕ папки из "ЯЕ БОРОДА") =====
 async function fetchIikoMenu() {
   try {
     const token = await getIikoToken();
@@ -86,34 +86,29 @@ async function fetchIikoMenu() {
     const allGroups = (resp.data.productGroups || [])
       .filter(g => !g.isDeleted)
       .map(g => ({ id: g.id, name: g.name, parentId: g.parentGroup || null }));
-    
-    console.log('[iiko] All groups (папки) found:', allGroups.map(g => g.name).join(', '));
 
-    // Ищем папку "Бургеры"
-    const burgerFolder = allGroups.find(g => 
-      g.name && g.name.toLowerCase().includes('бургер')
+    console.log('[iiko] All groups:', allGroups.map(g => `"${g.name}"`).join(', '));
+
+    // Ищем папку "ЯЕ БОРОДА"
+    const yaeBoroda = allGroups.find(g => 
+      g.name && g.name.toUpperCase().trim() === 'ЯЕ БОРОДА'
     );
 
-    if (!burgerFolder) {
-      console.error('[iiko] "Бургеры" folder not found. Available groups:', 
-        allGroups.map(g => g.name).join(', '));
+    if (!yaeBoroda) {
+      console.error('[iiko] "ЯЕ БОРОДА" folder not found. Available groups:', 
+        allGroups.map(g => `"${g.name}"`).join(', '));
       return null;
     }
 
-    console.log('[iiko] Found "Бургеры" folder ID:', burgerFolder.id);
+    console.log('[iiko] Found "ЯЕ БОРОДА" folder. ID:', yaeBoroda.id);
 
-    // Получаем ВСЕ категории (подпапки внутри "Бургеры")
-    const allCategories = (resp.data.productCategories || [])
-      .filter(c => !c.isDeleted)
-      .map(c => ({ id: c.id, name: c.name, parentId: c.parentGroup || null }));
-
-    // Фильтруем подпапки - те, чей родитель "Бургеры"
-    const subcategories = allCategories.filter(c => c.parentId === burgerFolder.id);
+    // Ищем ВСЕ подпапки внутри "ЯЕ БОРОДА" (Бургеры, Горячие блюда, Десерты и т.д.)
+    const subfolders = allGroups.filter(g => g.parentId === yaeBoroda.id);
     
-    console.log('[iiko] Found subcategories in "Бургеры":', subcategories.map(c => c.name).join(', '));
+    console.log('[iiko] Subfolders in "ЯЕ БОРОДА":', subfolders.map(g => g.name).join(', '));
 
-    if (subcategories.length === 0) {
-      console.error('[iiko] No subcategories found under "Бургеры"');
+    if (subfolders.length === 0) {
+      console.error('[iiko] No subfolders found under "ЯЕ БОРОДА"');
       return null;
     }
 
@@ -127,19 +122,21 @@ async function fetchIikoMenu() {
         categoryId: p.parentGroup || null,
       }));
 
-    // Фильтруем товары - только из подкатегорий "Бургеры"
-    const subcategoryIds = new Set(subcategories.map(c => c.id));
-    const products = allProducts.filter(p => subcategoryIds.has(p.categoryId));
+    // Фильтруем товары - только из подпапок ЯЕ БОРОДА
+    const subfolderId = new Set(subfolders.map(g => g.id));
+    const products = allProducts.filter(p => subfolderId.has(p.categoryId));
+
+    console.log(`[iiko] Total products: ${products.length}`);
 
     // Добавляем categoryName
-    const catById = Object.fromEntries(subcategories.map(c => [c.id, c.name]));
-    products.forEach(p => p.categoryName = catById[p.categoryId] || 'Прочее');
+    const folderById = Object.fromEntries(subfolders.map(g => [g.id, g.name]));
+    products.forEach(p => p.categoryName = folderById[p.categoryId] || 'Прочее');
 
-    db.data.menu = { categories: subcategories, products };
+    db.data.menu = { categories: subfolders, products };
     await db.write();
 
-    console.log(`[iiko] loaded ${subcategories.length} subcategories, ${products.length} products from "Бургеры" folder`);
-    return { categories: subcategories, products };
+    console.log(`[iiko] ✓ SUCCESS: Loaded ${subfolders.length} folders, ${products.length} products`);
+    return { categories: subfolders, products };
 
   } catch (e) {
     console.error('[iiko] menu load failed', e.response?.data || e.message);
