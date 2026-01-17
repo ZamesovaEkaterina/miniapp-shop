@@ -1,4 +1,4 @@
-// server.js — Express-сервер для Mini App + iiko интеграция с внешним меню
+// server.js — Express-сервер для Mini App + iiko интеграция
 require('dotenv').config();
 
 function mask(s){ return s ? String(s).slice(0,4) + '...' + String(s).slice(-4) : null; }
@@ -69,72 +69,72 @@ async function getIikoToken() {
   }
 }
 
-// ===== IIKO MENU (загружаем из внешнего меню "Борода доставка") =====
+// ===== IIKO MENU (загружаем подкатегории из "ЯЕ БОРОДА") =====
 async function fetchIikoMenu() {
   try {
     const token = await getIikoToken();
     if (!token) throw new Error('No iiko token (offline mode)');
 
-    console.log('[iiko] Loading external menus...');
+    console.log('[iiko] Loading menu from nomenclature...');
 
-    // Шаг 1: Получаем список внешних меню
-    const menusResp = await axios.post(
-      `${process.env.IIKO_API_BASE}/api/1/deliveries/external-menus`,
-      { organizationId: process.env.IIKO_ORG_ID },
-      { headers: { Authorization: `Bearer ${token}` } }
+    // Загружаем стандартное меню через nomenclature
+    const resp = await axios.post(`${process.env.IIKO_API_BASE}/api/1/nomenclature`, {
+      organizationId: process.env.IIKO_ORG_ID
+    }, { headers: { Authorization: `Bearer ${token}` } });
+
+    // Получаем ВСЕ категории
+    const allCategories = (resp.data.productCategories || [])
+      .filter(g => !g.isDeleted)
+      .map(g => ({ id: g.id, name: g.name, parentId: g.parentGroup || null }));
+    
+    console.log('[iiko] All categories found:', allCategories.map(c => c.name).join(', '));
+
+    // Ищем главную категорию "ЯЕ БОРОДА"
+    const yaeBoroda = allCategories.find(c => 
+      c.name && c.name.includes('ЯЕ БОРОДА')
     );
 
-    const externalMenus = menusResp.data?.externalMenus || [];
-    console.log('[iiko] Found external menus:', externalMenus.map(m => m.name).join(', '));
-
-    // Шаг 2: Ищем меню "Борода доставка"
-    const dostavkaMenu = externalMenus.find(m => 
-      m.name && (m.name.includes('доставка') || m.name.includes('Доставка'))
-    );
-
-    if (!dostavkaMenu) {
-      console.error('[iiko] Menu with "доставка" not found. Available:', externalMenus.map(m => m.name));
+    if (!yaeBoroda) {
+      console.error('[iiko] Category "ЯЕ БОРОДА" not found. Available categories:', 
+        allCategories.map(c => c.name).join(', '));
       return null;
     }
 
-    console.log('[iiko] Using external menu:', dostavkaMenu.name, '(ID:', dostavkaMenu.id, ')');
+    console.log('[iiko] Found "ЯЕ БОРОДА" category ID:', yaeBoroda.id);
 
-    // Шаг 3: Загружаем категории и товары этого меню
-    const menuResp = await axios.post(
-      `${process.env.IIKO_API_BASE}/api/1/menus/by-external-menu-id`,
-      {
-        organizationId: process.env.IIKO_ORG_ID,
-        externalMenuId: dostavkaMenu.id
-      },
-      { headers: { Authorization: `Bearer ${token}` } }
-    );
-
-    const menu = menuResp.data;
-    
-    // Парсим категории (groups)
-    const categories = (menu.groups || [])
-      .filter(g => !g.isDeleted)
-      .map(g => ({ id: g.id, name: g.name }));
-
-    // Парсим товары (items)
-    const products = (menu.items || [])
+    // Получаем ВСЕ товары
+    const allProducts = (resp.data.products || [])
       .filter(p => !p.isDeleted)
       .map(p => ({
         id: p.id,
         name: p.name,
-        price: Math.round((p.price?.currentPrice || 0) * 100) / 100,
-        categoryId: p.groupId || null,
+        price: Math.round((p.price || 0) * 100) / 100,
+        categoryId: p.parentGroup || null,
       }));
 
-    // Добавляем categoryName к каждому товару
-    const catById = Object.fromEntries(categories.map(c => [c.id, c.name]));
+    // Шаг 1: Фильтруем подкатегории - те, чей родитель "ЯЕ БОРОДА"
+    const subcategories = allCategories.filter(c => c.id !== yaeBoroda.id && c.parentId === yaeBoroda.id);
+    
+    console.log('[iiko] Found subcategories in "ЯЕ БОРОДА":', subcategories.map(c => c.name).join(', '));
+
+    if (subcategories.length === 0) {
+      console.error('[iiko] No subcategories found under "ЯЕ БОРОДА"');
+      return null;
+    }
+
+    // Шаг 2: Фильтруем товары - только из подкатегорий "ЯЕ БОРОДА"
+    const subcategoryIds = new Set(subcategories.map(c => c.id));
+    const products = allProducts.filter(p => subcategoryIds.has(p.categoryId));
+
+    // Добавляем categoryName
+    const catById = Object.fromEntries(subcategories.map(c => [c.id, c.name]));
     products.forEach(p => p.categoryName = catById[p.categoryId] || 'Прочее');
 
-    db.data.menu = { categories, products };
+    db.data.menu = { categories: subcategories, products };
     await db.write();
 
-    console.log(`[iiko] loaded ${categories.length} categories, ${products.length} products from "${dostavkaMenu.name}"`);
-    return { categories, products };
+    console.log(`[iiko] loaded ${subcategories.length} subcategories, ${products.length} products from "ЯЕ БОРОДА"`);
+    return { categories: subcategories, products };
 
   } catch (e) {
     console.error('[iiko] menu load failed', e.response?.data || e.message);
