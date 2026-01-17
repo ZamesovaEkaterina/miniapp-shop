@@ -1,4 +1,4 @@
-// server.js — минимальный Express-сервер для Mini App + iiko-заготовки (без top-level await)
+// server.js — Express-сервер для Mini App + iiko интеграция с внешним меню
 require('dotenv').config();
 
 function mask(s){ return s ? String(s).slice(0,4) + '...' + String(s).slice(-4) : null; }
@@ -69,28 +69,61 @@ async function getIikoToken() {
   }
 }
 
-// ===== IIKO MENU =====
+// ===== IIKO MENU (загружаем из внешнего меню "Борода доставка") =====
 async function fetchIikoMenu() {
   try {
     const token = await getIikoToken();
     if (!token) throw new Error('No iiko token (offline mode)');
 
-    const resp = await axios.post(`${process.env.IIKO_API_BASE}/api/1/nomenclature`, {
-      organizationId: process.env.IIKO_ORG_ID
-    }, { headers: { Authorization: `Bearer ${token}` } });
+    console.log('[iiko] Loading external menus...');
 
-    // Исправляем названия полей: productCategories -> категории, products -> товары
-    const categories = (resp.data.productCategories || [])
+    // Шаг 1: Получаем список внешних меню
+    const menusResp = await axios.post(
+      `${process.env.IIKO_API_BASE}/api/1/deliveries/external-menus`,
+      { organizationId: process.env.IIKO_ORG_ID },
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+
+    const externalMenus = menusResp.data?.externalMenus || [];
+    console.log('[iiko] Found external menus:', externalMenus.map(m => m.name).join(', '));
+
+    // Шаг 2: Ищем меню "Борода доставка"
+    const dostavkaMenu = externalMenus.find(m => 
+      m.name && (m.name.includes('доставка') || m.name.includes('Доставка'))
+    );
+
+    if (!dostavkaMenu) {
+      console.error('[iiko] Menu with "доставка" not found. Available:', externalMenus.map(m => m.name));
+      return null;
+    }
+
+    console.log('[iiko] Using external menu:', dostavkaMenu.name, '(ID:', dostavkaMenu.id, ')');
+
+    // Шаг 3: Загружаем категории и товары этого меню
+    const menuResp = await axios.post(
+      `${process.env.IIKO_API_BASE}/api/1/menus/by-external-menu-id`,
+      {
+        organizationId: process.env.IIKO_ORG_ID,
+        externalMenuId: dostavkaMenu.id
+      },
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+
+    const menu = menuResp.data;
+    
+    // Парсим категории (groups)
+    const categories = (menu.groups || [])
       .filter(g => !g.isDeleted)
       .map(g => ({ id: g.id, name: g.name }));
-    
-    const products = (resp.data.products || [])
+
+    // Парсим товары (items)
+    const products = (menu.items || [])
       .filter(p => !p.isDeleted)
       .map(p => ({
         id: p.id,
         name: p.name,
-        price: Math.round((p.price || 0) * 100) / 100,
-        categoryId: p.parentGroup || null,
+        price: Math.round((p.price?.currentPrice || 0) * 100) / 100,
+        categoryId: p.groupId || null,
       }));
 
     // Добавляем categoryName к каждому товару
@@ -100,7 +133,7 @@ async function fetchIikoMenu() {
     db.data.menu = { categories, products };
     await db.write();
 
-    console.log(`[iiko] loaded ${categories.length} categories, ${products.length} products`);
+    console.log(`[iiko] loaded ${categories.length} categories, ${products.length} products from "${dostavkaMenu.name}"`);
     return { categories, products };
 
   } catch (e) {
@@ -112,13 +145,13 @@ async function fetchIikoMenu() {
 // Fallback меню (на случай, если iiko недоступен)
 const FALLBACK = {
   categories: [
-    { id: 'c1', name: 'Пиво' },
+    { id: 'c1', name: 'Бургеры' },
     { id: 'c2', name: 'Закуски' }
   ],
   products: [
-    { id: 'p1', name: 'Лагер 0.5л', price: 250, categoryId: 'c1', categoryName: 'Пиво' },
-    { id: 'p2', name: 'IPA 0.5л', price: 320, categoryId: 'c1', categoryName: 'Пиво' },
-    { id: 'p3', name: 'Начос', price: 290, categoryId: 'c2', categoryName: 'Закуски' },
+    { id: 'p1', name: 'Классик Бургер', price: 350, categoryId: 'c1', categoryName: 'Бургеры' },
+    { id: 'p2', name: 'Двойной Бургер', price: 450, categoryId: 'c1', categoryName: 'Бургеры' },
+    { id: 'p3', name: 'Картофель фри', price: 150, categoryId: 'c2', categoryName: 'Закуски' },
   ]
 };
 
@@ -237,7 +270,6 @@ async function sendOrderToIiko(order, user) {
 
   try {
     // Примерный payload для iiko (зависит от версии API)
-    // Может быть /api/1/deliveries/create или /api/1/orders/create
     const payload = {
       organizationId: process.env.IIKO_ORG_ID,
       order: {
@@ -254,7 +286,7 @@ async function sendOrderToIiko(order, user) {
       }
     };
 
-    // Пробуем отправить (endpoint может быть /deliveries/create или /orders/create)
+    // Пробуем отправить
     const resp = await axios.post(
       `${process.env.IIKO_API_BASE}/api/1/deliveries/create`,
       payload,
@@ -262,9 +294,7 @@ async function sendOrderToIiko(order, user) {
     );
 
     console.log('[iiko] order sent:', resp.data?.id);
-    // Можно сохранить iikoOrderId в нашу БД для синхронизации статусов
   } catch (e) {
-    // Если ошибка — просто логируем (заказ уже в нашей БД)
     console.error('[iiko] order send error', e.response?.data || e.message);
   }
 }
