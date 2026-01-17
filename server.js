@@ -24,7 +24,6 @@ app.use(express.static('public'));
 
 const db = new Low(new JSONFile('.db.json'), { users: {}, orders: [], menu: { categories: [], products: [] } });
 
-// ===== TELEGRAM INIT DATA VALIDATION =====
 function validateInitData(initData) {
   if (!initData) return { ok: false, reason: 'empty' };
   const params = new URLSearchParams(initData);
@@ -45,7 +44,6 @@ function validateInitData(initData) {
   return { ok: hmac === hash, reason: hmac === hash ? null : 'hash_mismatch' };
 }
 
-// ===== IIKO TOKEN =====
 let iikoToken = null;
 let iikoTokenExp = 0;
 
@@ -68,27 +66,82 @@ async function getIikoToken() {
   }
 }
 
-// ===== IIKO MENU =====
+// ===== ПОПРОБУЕМ ВСЕ ENDPOINTS =====
 async function fetchIikoMenu() {
   try {
     const token = await getIikoToken();
     if (!token) throw new Error('No iiko token');
 
-    const resp = await axios.post(`${process.env.IIKO_API_BASE}/api/1/nomenclature`, {
-      organizationId: process.env.IIKO_ORG_ID
-    }, { headers: { Authorization: `Bearer ${token}` } });
+    console.log('[iiko] ========== TRYING ALL ENDPOINTS ==========');
 
-    // Логируем ВСЕ товары: name | price | inMenu
-    console.log('[iiko] ========== ALL PRODUCTS ==========');
-    const allProds = resp.data.products || [];
-    console.log(`[iiko] Total: ${allProds.length}`);
-    
-    allProds.forEach((p, idx) => {
-      const prices = p.sizePrices?.map(sp => `${sp.price?.currentPrice}(${sp.price?.isIncludedInMenu})`) || [];
-      console.log(`[iiko] [${idx}] "${p.name}" | prices: [${prices.join(', ')}]`);
-    });
-    
-    console.log('[iiko] =====================================');
+    // 1. NOMENCLATURE (то что мы использовали)
+    try {
+      console.log('[iiko] 1. Trying /nomenclature...');
+      const resp1 = await axios.post(`${process.env.IIKO_API_BASE}/api/1/nomenclature`, {
+        organizationId: process.env.IIKO_ORG_ID
+      }, { headers: { Authorization: `Bearer ${token}` } });
+      
+      console.log('[iiko] nomenclature keys:', Object.keys(resp1.data));
+      if (resp1.data.products) {
+        const activeProds = resp1.data.products.filter(p => {
+          if (!p.sizePrices) return false;
+          return p.sizePrices.some(sp => sp.price?.currentPrice > 0 && sp.price?.isIncludedInMenu);
+        });
+        console.log(`[iiko] nomenclature active products: ${activeProds.length}/${resp1.data.products.length}`);
+      }
+    } catch (e) {
+      console.log('[iiko] /nomenclature error:', e.message);
+    }
+
+    // 2. ORGANIZATION MENU
+    try {
+      console.log('[iiko] 2. Trying /organization/menu...');
+      const resp2 = await axios.get(`${process.env.IIKO_API_BASE}/api/1/organization/menu`, {
+        params: { organizationId: process.env.IIKO_ORG_ID },
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      
+      console.log('[iiko] organization/menu keys:', Object.keys(resp2.data));
+      console.log('[iiko] organization/menu data:', JSON.stringify(resp2.data).substring(0, 500));
+    } catch (e) {
+      console.log('[iiko] /organization/menu error:', e.message);
+    }
+
+    // 3. DELIVERY MENU
+    try {
+      console.log('[iiko] 3. Trying /deliveries/menu...');
+      const resp3 = await axios.post(`${process.env.IIKO_API_BASE}/api/1/deliveries/menu`, {
+        organizationId: process.env.IIKO_ORG_ID
+      }, { headers: { Authorization: `Bearer ${token}` } });
+      
+      console.log('[iiko] deliveries/menu keys:', Object.keys(resp3.data));
+      if (resp3.data.categories) {
+        console.log('[iiko] deliveries/menu categories:', resp3.data.categories.length);
+      }
+      if (resp3.data.products) {
+        console.log('[iiko] deliveries/menu products:', resp3.data.products.length);
+        resp3.data.products.slice(0, 5).forEach((p, i) => {
+          console.log(`[iiko]   [${i}] "${p.name}" price=${p.price}`);
+        });
+      }
+    } catch (e) {
+      console.log('[iiko] /deliveries/menu error:', e.message);
+    }
+
+    // 4. COMBO LIST
+    try {
+      console.log('[iiko] 4. Trying /combo_list...');
+      const resp4 = await axios.get(`${process.env.IIKO_API_BASE}/api/1/combo_list`, {
+        params: { organizationId: process.env.IIKO_ORG_ID },
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      
+      console.log('[iiko] combo_list keys:', Object.keys(resp4.data));
+    } catch (e) {
+      console.log('[iiko] /combo_list error:', e.message);
+    }
+
+    console.log('[iiko] ==========================================');
 
     db.data.menu = FALLBACK;
     await db.write();
@@ -100,7 +153,6 @@ async function fetchIikoMenu() {
   }
 }
 
-// Fallback меню
 const FALLBACK = {
   categories: [
     { id: 'c1', name: 'Бургеры' },
@@ -112,8 +164,6 @@ const FALLBACK = {
     { id: 'p3', name: 'Картофель фри', price: 150, categoryId: 'c2', categoryName: 'Закуски' },
   ]
 };
-
-// ===== API ENDPOINTS =====
 
 app.post('/api/bootstrap', async (req, res) => {
   const { initData } = req.body || {};
@@ -232,8 +282,7 @@ async function sendOrderToIiko(order, user) {
         items: order.items.map(i => ({
           productId: i.id,
           amount: i.qty
-        })),
-        comment: `Telegram Mini App order #${order.number}`
+        }))
       }
     };
 
