@@ -69,7 +69,7 @@ async function getIikoToken() {
   }
 }
 
-// ===== IIKO MENU (DEBUG: вся структура ответа) =====
+// ===== IIKO MENU (ПРАВИЛЬНЫЙ ПАРСИНГ) =====
 async function fetchIikoMenu() {
   try {
     const token = await getIikoToken();
@@ -82,61 +82,81 @@ async function fetchIikoMenu() {
       organizationId: process.env.IIKO_ORG_ID
     }, { headers: { Authorization: `Bearer ${token}` } });
 
-    // ===== DEBUG: ВЫВЕСТИ ВСЮSTRUCTУРУ ОТВЕТА =====
-    console.log('[iiko] ========== FULL RESPONSE STRUCTURE ==========');
-    console.log('[iiko] Response keys:', Object.keys(resp.data));
-    console.log('[iiko] Response.data:', JSON.stringify(resp.data, null, 2));
-    console.log('[iiko] ==========================================');
+    // ===== ПОЛУЧАЕМ ГРУППЫ (категории) =====
+    const allGroups = (resp.data.productGroups || [])
+      .filter(g => !g.isDeleted)
+      .map(g => ({ id: g.id, name: g.name, parentId: g.parentGroup || null }));
 
-    // Проверяем что есть в ответе
-    if (resp.data.productGroups) {
-      console.log('[iiko] productGroups found:', resp.data.productGroups.length);
-    } else {
-      console.log('[iiko] ⚠️  productGroups NOT found');
+    console.log(`[iiko] Total groups: ${allGroups.length}`);
+
+    // ===== ПОЛУЧАЕМ ТОВАРЫ И ФИЛЬТРУЕМ =====
+    const allProducts = (resp.data.products || [])
+      .filter(p => !p.isDeleted); // Не удалённые
+
+    console.log(`[iiko] Total products in nomenclature: ${allProducts.length}`);
+
+    // ===== ПАРСИМ ТОВАРЫ: берём ПЕРВЫЙ активный сайз с ценой =====
+    const products = [];
+    const categoriesSet = new Set();
+
+    for (const prod of allProducts) {
+      // Ищем первый активный размер с ценой
+      let activePrice = null;
+      
+      if (prod.sizePrices && Array.isArray(prod.sizePrices)) {
+        for (const sp of prod.sizePrices) {
+          // Проверяем: цена есть, товар в меню, цена > 0
+          if (sp.price && sp.price.currentPrice > 0 && sp.price.isIncludedInMenu === true) {
+            activePrice = sp.price.currentPrice;
+            break;
+          }
+        }
+      }
+
+      // Если нашли активную цену — добавляем товар
+      if (activePrice !== null) {
+        categoriesSet.add(prod.parentGroup || 'default');
+        products.push({
+          id: prod.id,
+          name: prod.name,
+          price: Math.round(activePrice * 100) / 100,
+          categoryId: prod.parentGroup || 'default',
+          categoryName: 'Товары'
+        });
+      }
     }
 
-    if (resp.data.productCategories) {
-      console.log('[iiko] productCategories found:', resp.data.productCategories.length);
-    } else {
-      console.log('[iiko] ⚠️  productCategories NOT found');
-    }
+    console.log(`[iiko] ✓ Filtered products with active price: ${products.length}`);
 
-    if (resp.data.products) {
-      console.log('[iiko] products found:', resp.data.products.length);
-    } else {
-      console.log('[iiko] ⚠️  products NOT found');
-    }
-
-    // Если нет товаров, используем FALLBACK
-    if (!resp.data.products || resp.data.products.length === 0) {
-      console.log('[iiko] No products in response, using FALLBACK');
+    if (products.length === 0) {
+      console.warn('[iiko] No products with active prices found, using FALLBACK');
       db.data.menu = FALLBACK;
       await db.write();
       return FALLBACK;
     }
 
-    // Если есть товары, но нет групп — просто выводим товары без категоризации
-    const products = (resp.data.products || [])
-      .filter(p => !p.isDeleted)
-      .map(p => ({
-        id: p.id,
-        name: p.name,
-        price: Math.round((p.price || 0) * 100) / 100,
-        categoryId: 'default',
-        categoryName: 'Товары'
-      }));
+    // ===== ДОБАВЛЯЕМ НЕДОСТАЮЩИЕ КАТЕГОРИИ =====
+    const categoryNames = Object.fromEntries(
+      allGroups.map(g => [g.id, g.name])
+    );
+    products.forEach(p => {
+      p.categoryName = categoryNames[p.categoryId] || 'Прочее';
+    });
 
-    const categories = [{ id: 'default', name: 'Товары' }];
+    // Берём только используемые категории
+    const categories = allGroups.filter(g => categoriesSet.has(g.id));
+    if (categories.length === 0) {
+      categories.push({ id: 'default', name: 'Товары' });
+    }
 
     db.data.menu = { categories, products };
     await db.write();
 
-    console.log(`[iiko] ✓ Loaded ${products.length} products`);
+    console.log(`[iiko] ✓ SUCCESS: ${categories.length} categories, ${products.length} products`);
     return { categories, products };
 
   } catch (e) {
     console.error('[iiko] menu load failed', e.response?.data || e.message);
-    console.error('[iiko] Full error stack:', e);
     return null;
   }
 }
@@ -328,3 +348,4 @@ start().catch(err => {
   console.error('[fatal] startup error:', err);
   process.exit(1);
 });
+
