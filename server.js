@@ -69,7 +69,7 @@ async function getIikoToken() {
   }
 }
 
-// ===== IIKO MENU (загружаем ВСЕ папки из "ЯЕ БОРОДА") =====
+// ===== IIKO MENU (DEBUG: выводим ВСЕ папки) =====
 async function fetchIikoMenu() {
   try {
     const token = await getIikoToken();
@@ -87,29 +87,44 @@ async function fetchIikoMenu() {
       .filter(g => !g.isDeleted)
       .map(g => ({ id: g.id, name: g.name, parentId: g.parentGroup || null }));
 
-    console.log('[iiko] All groups:', allGroups.map(g => `"${g.name}"`).join(', '));
+    console.log('[iiko] ========== DEBUG: ALL GROUPS (ПАПКИ) ==========');
+    console.log('[iiko] Total groups found:', allGroups.length);
+    allGroups.forEach((g, idx) => {
+      console.log(`[iiko]   [${idx}] Name: "${g.name}" | ID: ${g.id} | ParentID: ${g.parentId}`);
+    });
+    console.log('[iiko] ============================================');
 
-    // Ищем папку "ЯЕ БОРОДА"
-    const yaeBoroda = allGroups.find(g => 
-      g.name && g.name.toUpperCase().trim() === 'ЯЕ БОРОДА'
-    );
+    // ====== АВТОПОИСК: ищем МАКСИМАЛЬНО КОРНЕВУЮ папку (без parentId) =====
+    const rootFolders = allGroups.filter(g => !g.parentId);
+    console.log(`[iiko] Root folders (без parentId): ${rootFolders.length}`);
+    rootFolders.forEach(r => {
+      console.log(`[iiko]   - "${r.name}" (ID: ${r.id})`);
+    });
 
-    if (!yaeBoroda) {
-      console.error('[iiko] "ЯЕ БОРОДА" folder not found. Available groups:', 
-        allGroups.map(g => `"${g.name}"`).join(', '));
+    // Если нет корневых, берём первую папку
+    const targetFolder = rootFolders.length > 0 ? rootFolders[0] : allGroups[0];
+    if (!targetFolder) {
+      console.error('[iiko] No groups found at all!');
       return null;
     }
 
-    console.log('[iiko] Found "ЯЕ БОРОДА" folder. ID:', yaeBoroda.id);
+    console.log(`[iiko] Selected target folder: "${targetFolder.name}" (ID: ${targetFolder.id})`);
 
-    // Ищем ВСЕ подпапки внутри "ЯЕ БОРОДА" (Бургеры, Горячие блюда, Десерты и т.д.)
-    const subfolders = allGroups.filter(g => g.parentId === yaeBoroda.id);
-    
-    console.log('[iiko] Subfolders in "ЯЕ БОРОДА":', subfolders.map(g => g.name).join(', '));
+    // Ищем подпапки внутри выбранной папки
+    const subfolders = allGroups.filter(g => g.parentId === targetFolder.id);
+    console.log(`[iiko] Subfolders inside "${targetFolder.name}": ${subfolders.length}`);
+    subfolders.forEach(s => {
+      console.log(`[iiko]   - "${s.name}" (ID: ${s.id})`);
+    });
 
-    if (subfolders.length === 0) {
-      console.error('[iiko] No subfolders found under "ЯЕ БОРОДА"');
-      return null;
+    // Если подпапок нет, берём товары прямо из targetFolder
+    let productsParentIds;
+    if (subfolders.length > 0) {
+      productsParentIds = new Set(subfolders.map(g => g.id));
+      console.log('[iiko] Using subfolders as product parents');
+    } else {
+      productsParentIds = new Set([targetFolder.id]);
+      console.log('[iiko] No subfolders found, using root folder as product parent');
     }
 
     // Получаем ВСЕ товары
@@ -122,24 +137,32 @@ async function fetchIikoMenu() {
         categoryId: p.parentGroup || null,
       }));
 
-    // Фильтруем товары - только из подпапок ЯЕ БОРОДА
-    const subfolderId = new Set(subfolders.map(g => g.id));
-    const products = allProducts.filter(p => subfolderId.has(p.categoryId));
+    console.log(`[iiko] Total products in nomenclature: ${allProducts.length}`);
 
-    console.log(`[iiko] Total products: ${products.length}`);
+    // Фильтруем товары
+    const products = allProducts.filter(p => productsParentIds.has(p.categoryId));
+    console.log(`[iiko] Products filtered for our folders: ${products.length}`);
+
+    if (products.length === 0) {
+      console.error('[iiko] No products found after filtering!');
+      return null;
+    }
 
     // Добавляем categoryName
-    const folderById = Object.fromEntries(subfolders.map(g => [g.id, g.name]));
+    const folderById = Object.fromEntries(allGroups.map(g => [g.id, g.name]));
     products.forEach(p => p.categoryName = folderById[p.categoryId] || 'Прочее');
 
-    db.data.menu = { categories: subfolders, products };
+    const categories = subfolders.length > 0 ? subfolders : [targetFolder];
+
+    db.data.menu = { categories, products };
     await db.write();
 
-    console.log(`[iiko] ✓ SUCCESS: Loaded ${subfolders.length} folders, ${products.length} products`);
-    return { categories: subfolders, products };
+    console.log(`[iiko] ✓ SUCCESS: Loaded ${categories.length} categories, ${products.length} products`);
+    return { categories, products };
 
   } catch (e) {
     console.error('[iiko] menu load failed', e.response?.data || e.message);
+    console.error('[iiko] Full error:', e);
     return null;
   }
 }
@@ -331,3 +354,4 @@ start().catch(err => {
   console.error('[fatal] startup error:', err);
   process.exit(1);
 });
+
