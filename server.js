@@ -69,7 +69,7 @@ async function getIikoToken() {
   }
 }
 
-// ===== IIKO MENU (ПОЛНЫЙ DEBUG) =====
+// ===== IIKO MENU (ПРОВЕРЯЕМ ВСЕ sizePrices!) =====
 async function fetchIikoMenu() {
   try {
     const token = await getIikoToken();
@@ -81,41 +81,84 @@ async function fetchIikoMenu() {
       organizationId: process.env.IIKO_ORG_ID
     }, { headers: { Authorization: `Bearer ${token}` } });
 
-    // ===== ПОЛНЫЙ DEBUG: выводим СТРУКТУРУ ответа =====
-    console.log('[iiko] ========== RESPONSE STRUCTURE ==========');
-    console.log('[iiko] Root keys:', Object.keys(resp.data).sort());
-    console.log('[iiko] productGroups count:', resp.data.productGroups?.length || 0);
-    console.log('[iiko] products count:', resp.data.products?.length || 0);
-    console.log('[iiko] =========================================');
+    // ===== ПОЛУЧАЕМ ГРУППЫ (категории) =====
+    const allGroups = (resp.data.productGroups || [])
+      .filter(g => !g.isDeleted)
+      .map(g => ({ id: g.id, name: g.name, parentId: g.parentGroup || null }));
 
-    // Выводим ПЕРВЫЙ товар полностью
-    if (resp.data.products && resp.data.products.length > 0) {
-      console.log('[iiko] ПЕРВЫЙ товар (ПОЛНЫЙ):', JSON.stringify(resp.data.products[0], null, 2));
-    }
+    console.log(`[iiko] Total groups: ${allGroups.length}`);
 
-    // Выводим первые 5 товаров (краткие)
-    if (resp.data.products && resp.data.products.length > 0) {
-      console.log('[iiko] ========== ПЕРВЫЕ 5 ТОВАРОВ ==========');
-      resp.data.products.slice(0, 5).forEach((p, i) => {
-        console.log(`[iiko] [${i}] name: "${p.name}" | type: "${p.type}" | parentGroup: "${p.parentGroup}" | isDeleted: ${p.isDeleted}`);
-        if (p.sizePrices && p.sizePrices.length > 0) {
-          const firstSize = p.sizePrices[0];
-          if (firstSize.price) {
-            console.log(`[iiko]      ↳ sizePrices[0]: price=${firstSize.price.currentPrice}, inMenu=${firstSize.price.isIncludedInMenu}`);
+    // ===== ПОЛУЧАЕМ ТОВАРЫ (ПРОВЕРЯЕМ ВСЕ sizePrices!) =====
+    const allProducts = (resp.data.products || [])
+      .filter(p => !p.isDeleted);
+
+    console.log(`[iiko] Total products in nomenclature: ${allProducts.length}`);
+
+    const products = [];
+    const categoriesSet = new Set();
+    let skippedCount = 0;
+
+    for (const prod of allProducts) {
+      // ===== КЛЮЧЕВОЙ МОМЕНТ: Ищем ЛЮБОЙ активный размер с ценой =====
+      let activePrice = null;
+      
+      if (prod.sizePrices && Array.isArray(prod.sizePrices)) {
+        for (const sp of prod.sizePrices) {
+          // Проверяем: цена > 0, товар в меню
+          if (sp.price && sp.price.currentPrice > 0 && sp.price.isIncludedInMenu === true) {
+            activePrice = sp.price.currentPrice;
+            break; // НАШЛИ! Прекращаем искать
           }
         }
-      });
-      console.log('[iiko] ======================================');
+      }
+
+      // Если нашли активную цену — добавляем товар
+      if (activePrice !== null) {
+        const categoryId = prod.parentGroup || 'default';
+        categoriesSet.add(categoryId);
+        products.push({
+          id: prod.id,
+          name: prod.name,
+          price: Math.round(activePrice * 100) / 100,
+          categoryId,
+          categoryName: 'Товары'
+        });
+      } else {
+        skippedCount++;
+      }
     }
 
-    // НА ЭТОМ ОСТАНОВИМСЯ, ДРУГИХ ФИЛЬТРОВ НЕТ
-    db.data.menu = FALLBACK;
+    console.log(`[iiko] ✓ Products loaded: ${products.length}`);
+    console.log(`[iiko] ✓ Skipped (no active price): ${skippedCount}`);
+
+    if (products.length === 0) {
+      console.warn('[iiko] No products found, using FALLBACK');
+      db.data.menu = FALLBACK;
+      await db.write();
+      return FALLBACK;
+    }
+
+    // ===== ДОБАВЛЯЕМ КАТЕГОРИИ =====
+    const categoryNames = Object.fromEntries(
+      allGroups.map(g => [g.id, g.name])
+    );
+    products.forEach(p => {
+      p.categoryName = categoryNames[p.categoryId] || 'Прочее';
+    });
+
+    const categories = allGroups.filter(g => categoriesSet.has(g.id));
+    if (categories.length === 0) {
+      categories.push({ id: 'default', name: 'Товары' });
+    }
+
+    db.data.menu = { categories, products };
     await db.write();
 
-    return null; // для отладки
+    console.log(`[iiko] ✓ SUCCESS: ${categories.length} categories, ${products.length} products`);
+    return { categories, products };
 
   } catch (e) {
-    console.error('[iiko] error:', e.message);
+    console.error('[iiko] menu load failed:', e.message);
     return null;
   }
 }
@@ -173,7 +216,7 @@ app.get('/api/menu', async (req, res) => {
   }
 });
 
-// 3. Получить заказы (последние 20 для всех, или фильтровать по userId если нужно)
+// 3. Получить заказы
 app.get('/api/orders', (req, res) => {
   res.json({ orders: db.data.orders.slice(-20).reverse() });
 });
@@ -228,7 +271,6 @@ app.post('/api/orders', async (req, res) => {
     db.data.orders.push(record);
     await db.write();
 
-    // Пытаемся отправить в iiko (асинхронно, не ждём)
     sendOrderToIiko(record, user).catch(e => console.error('[iiko] order send failed', e));
 
     res.json({ ok: true, orderNumber, total });
@@ -247,7 +289,6 @@ async function sendOrderToIiko(order, user) {
   }
 
   try {
-    // Примерный payload для iiko (зависит от версии API)
     const payload = {
       organizationId: process.env.IIKO_ORG_ID,
       order: {
@@ -260,11 +301,10 @@ async function sendOrderToIiko(order, user) {
           productId: i.id,
           amount: i.qty
         })),
-        comment: `Telegram Mini App order #${order.number}, delivery: ${order.delivery?.method} (${order.delivery?.zone}), address: ${order.delivery?.address || 'N/A'}`
+        comment: `Telegram Mini App order #${order.number}`
       }
     };
 
-    // Пробуем отправить
     const resp = await axios.post(
       `${process.env.IIKO_API_BASE}/api/1/deliveries/create`,
       payload,
@@ -291,7 +331,6 @@ app.post('/api/whoami', (req, res) => {
 async function start() {
   await db.read();
   
-  // Пытаемся загрузить меню из iiko при старте
   const menuLoaded = await fetchIikoMenu();
   if (!menuLoaded) {
     console.log('[db] using FALLBACK menu');
@@ -307,3 +346,4 @@ start().catch(err => {
   console.error('[fatal] startup error:', err);
   process.exit(1);
 });
+
