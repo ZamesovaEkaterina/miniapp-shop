@@ -20,9 +20,8 @@ const { nanoid } = require('nanoid');
 const app = express();
 app.use(cors());
 app.use(express.json());
-app.use(express.static('public')); // отдаём фронт из /public
+app.use(express.static('public'));
 
-// простая JSON-база в памяти
 const db = new Low(new JSONFile('.db.json'), { users: {}, orders: [], menu: { categories: [], products: [] } });
 
 // ===== TELEGRAM INIT DATA VALIDATION =====
@@ -60,7 +59,7 @@ async function getIikoToken() {
       apiLogin: process.env.IIKO_API_LOGIN
     });
     iikoToken = resp.data.token;
-    iikoTokenExp = now + 9 * 60 * 1000; // 9 минут (токен живёт 10)
+    iikoTokenExp = now + 9 * 60 * 1000;
     console.log('[iiko] token acquired');
     return iikoToken;
   } catch (e) {
@@ -69,101 +68,39 @@ async function getIikoToken() {
   }
 }
 
-// ===== IIKO MENU (ПРОВЕРЯЕМ ВСЕ sizePrices!) =====
+// ===== IIKO MENU =====
 async function fetchIikoMenu() {
   try {
     const token = await getIikoToken();
-    if (!token) throw new Error('No iiko token (offline mode)');
-
-    console.log('[iiko] Loading menu from nomenclature...');
+    if (!token) throw new Error('No iiko token');
 
     const resp = await axios.post(`${process.env.IIKO_API_BASE}/api/1/nomenclature`, {
       organizationId: process.env.IIKO_ORG_ID
     }, { headers: { Authorization: `Bearer ${token}` } });
 
-    // ===== ПОЛУЧАЕМ ГРУППЫ (категории) =====
-    const allGroups = (resp.data.productGroups || [])
-      .filter(g => !g.isDeleted)
-      .map(g => ({ id: g.id, name: g.name, parentId: g.parentGroup || null }));
-
-    console.log(`[iiko] Total groups: ${allGroups.length}`);
-
-    // ===== ПОЛУЧАЕМ ТОВАРЫ (ПРОВЕРЯЕМ ВСЕ sizePrices!) =====
-    const allProducts = (resp.data.products || [])
-      .filter(p => !p.isDeleted);
-
-    console.log(`[iiko] Total products in nomenclature: ${allProducts.length}`);
-
-    const products = [];
-    const categoriesSet = new Set();
-    let skippedCount = 0;
-
-    for (const prod of allProducts) {
-      // ===== КЛЮЧЕВОЙ МОМЕНТ: Ищем ЛЮБОЙ активный размер с ценой =====
-      let activePrice = null;
-      
-      if (prod.sizePrices && Array.isArray(prod.sizePrices)) {
-        for (const sp of prod.sizePrices) {
-          // Проверяем: цена > 0, товар в меню
-          if (sp.price && sp.price.currentPrice > 0 && sp.price.isIncludedInMenu === true) {
-            activePrice = sp.price.currentPrice;
-            break; // НАШЛИ! Прекращаем искать
-          }
-        }
-      }
-
-      // Если нашли активную цену — добавляем товар
-      if (activePrice !== null) {
-        const categoryId = prod.parentGroup || 'default';
-        categoriesSet.add(categoryId);
-        products.push({
-          id: prod.id,
-          name: prod.name,
-          price: Math.round(activePrice * 100) / 100,
-          categoryId,
-          categoryName: 'Товары'
-        });
-      } else {
-        skippedCount++;
-      }
-    }
-
-    console.log(`[iiko] ✓ Products loaded: ${products.length}`);
-    console.log(`[iiko] ✓ Skipped (no active price): ${skippedCount}`);
-
-    if (products.length === 0) {
-      console.warn('[iiko] No products found, using FALLBACK');
-      db.data.menu = FALLBACK;
-      await db.write();
-      return FALLBACK;
-    }
-
-    // ===== ДОБАВЛЯЕМ КАТЕГОРИИ =====
-    const categoryNames = Object.fromEntries(
-      allGroups.map(g => [g.id, g.name])
-    );
-    products.forEach(p => {
-      p.categoryName = categoryNames[p.categoryId] || 'Прочее';
+    // Логируем ВСЕ товары: name | price | inMenu
+    console.log('[iiko] ========== ALL PRODUCTS ==========');
+    const allProds = resp.data.products || [];
+    console.log(`[iiko] Total: ${allProds.length}`);
+    
+    allProds.forEach((p, idx) => {
+      const prices = p.sizePrices?.map(sp => `${sp.price?.currentPrice}(${sp.price?.isIncludedInMenu})`) || [];
+      console.log(`[iiko] [${idx}] "${p.name}" | prices: [${prices.join(', ')}]`);
     });
+    
+    console.log('[iiko] =====================================');
 
-    const categories = allGroups.filter(g => categoriesSet.has(g.id));
-    if (categories.length === 0) {
-      categories.push({ id: 'default', name: 'Товары' });
-    }
-
-    db.data.menu = { categories, products };
+    db.data.menu = FALLBACK;
     await db.write();
-
-    console.log(`[iiko] ✓ SUCCESS: ${categories.length} categories, ${products.length} products`);
-    return { categories, products };
+    return null;
 
   } catch (e) {
-    console.error('[iiko] menu load failed:', e.message);
+    console.error('[iiko] error:', e.message);
     return null;
   }
 }
 
-// Fallback меню (на случай, если iiko недоступен)
+// Fallback меню
 const FALLBACK = {
   categories: [
     { id: 'c1', name: 'Бургеры' },
@@ -178,7 +115,6 @@ const FALLBACK = {
 
 // ===== API ENDPOINTS =====
 
-// 1. Bootstrap: загрузить профиль + меню + заказы
 app.post('/api/bootstrap', async (req, res) => {
   const { initData } = req.body || {};
   let user = null;
@@ -205,7 +141,6 @@ app.post('/api/bootstrap', async (req, res) => {
   res.json({ user, categories: menu.categories, products: menu.products, orders });
 });
 
-// 2. Получить меню
 app.get('/api/menu', async (req, res) => {
   try {
     await db.read();
@@ -216,12 +151,10 @@ app.get('/api/menu', async (req, res) => {
   }
 });
 
-// 3. Получить заказы
 app.get('/api/orders', (req, res) => {
   res.json({ orders: db.data.orders.slice(-20).reverse() });
 });
 
-// 4. Создать заказ
 app.post('/api/orders', async (req, res) => {
   try {
     const { initData, items, delivery } = req.body || {};
@@ -280,7 +213,6 @@ app.post('/api/orders', async (req, res) => {
   }
 });
 
-// ===== IIKO ORDER SEND (ASYNC) =====
 async function sendOrderToIiko(order, user) {
   const token = await getIikoToken();
   if (!token) {
@@ -317,7 +249,6 @@ async function sendOrderToIiko(order, user) {
   }
 }
 
-// ===== DEBUG =====
 app.post('/api/whoami', (req, res) => {
   const { initData } = req.body || {};
   const v = validateInitData(initData);
@@ -327,7 +258,6 @@ app.post('/api/whoami', (req, res) => {
   res.json({ ok: true, user });
 });
 
-// ===== START =====
 async function start() {
   await db.read();
   
@@ -346,4 +276,3 @@ start().catch(err => {
   console.error('[fatal] startup error:', err);
   process.exit(1);
 });
-
