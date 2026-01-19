@@ -66,89 +66,146 @@ async function getIikoToken() {
   }
 }
 
-// ===== ПОПРОБУЕМ ВСЕ ENDPOINTS =====
+// ===== FETCH IIKO MENU - БЕРЁМ ВСЮ НОМЕНКЛАТУРУ + ЦЕНЫ ИЗ ПРАЙС-ЛИСТА =====
 async function fetchIikoMenu() {
   try {
     const token = await getIikoToken();
     if (!token) throw new Error('No iiko token');
 
-    console.log('[iiko] ========== TRYING ALL ENDPOINTS ==========');
+    console.log('[iiko] Loading nomenclature...');
 
-    // 1. NOMENCLATURE (то что мы использовали)
-    try {
-      console.log('[iiko] 1. Trying /nomenclature...');
-      const resp1 = await axios.post(`${process.env.IIKO_API_BASE}/api/1/nomenclature`, {
-        organizationId: process.env.IIKO_ORG_ID
-      }, { headers: { Authorization: `Bearer ${token}` } });
-      
-      console.log('[iiko] nomenclature keys:', Object.keys(resp1.data));
-      if (resp1.data.products) {
-        const activeProds = resp1.data.products.filter(p => {
-          if (!p.sizePrices) return false;
-          return p.sizePrices.some(sp => sp.price?.currentPrice > 0 && sp.price?.isIncludedInMenu);
-        });
-        console.log(`[iiko] nomenclature active products: ${activeProds.length}/${resp1.data.products.length}`);
-      }
-    } catch (e) {
-      console.log('[iiko] /nomenclature error:', e.message);
-    }
+    // 1. ПОЛУЧАЕМ НОМЕНКЛАТУРУ (ВСЕ товары, не только те что в меню)
+    const nomResp = await axios.post(`${process.env.IIKO_API_BASE}/api/1/nomenclature`, {
+      organizationId: process.env.IIKO_ORG_ID
+    }, { headers: { Authorization: `Bearer ${token}` } });
 
-    // 2. ORGANIZATION MENU
+    const allProducts = nomResp.data.products || [];
+    const productCategories = nomResp.data.productCategories || [];
+
+    console.log(`[iiko] Total products in nomenclature: ${allProducts.length}`);
+
+    // ===== ФИЛЬТРУЕМ: Только не удалённые товары (не смотрим на isIncludedInMenu!) =====
+    const activeProducts = allProducts.filter(p => !p.isDeleted);
+    console.log(`[iiko] Active products (not deleted): ${activeProducts.length}`);
+
+    // 2. ПОЛУЧАЕМ PRICELISTS (текущие цены)
+    console.log('[iiko] Loading pricelists...');
+    let pricelistResp;
     try {
-      console.log('[iiko] 2. Trying /organization/menu...');
-      const resp2 = await axios.get(`${process.env.IIKO_API_BASE}/api/1/organization/menu`, {
+      pricelistResp = await axios.get(`${process.env.IIKO_API_BASE}/api/1/pricelists`, {
         params: { organizationId: process.env.IIKO_ORG_ID },
         headers: { Authorization: `Bearer ${token}` }
       });
-      
-      console.log('[iiko] organization/menu keys:', Object.keys(resp2.data));
-      console.log('[iiko] organization/menu data:', JSON.stringify(resp2.data).substring(0, 500));
     } catch (e) {
-      console.log('[iiko] /organization/menu error:', e.message);
+      console.log('[iiko] pricelists error:', e.message);
+      pricelistResp = { data: { pricelists: [] } };
     }
 
-    // 3. DELIVERY MENU
-    try {
-      console.log('[iiko] 3. Trying /deliveries/menu...');
-      const resp3 = await axios.post(`${process.env.IIKO_API_BASE}/api/1/deliveries/menu`, {
-        organizationId: process.env.IIKO_ORG_ID
-      }, { headers: { Authorization: `Bearer ${token}` } });
+    const pricelists = pricelistResp.data.pricelists || [];
+    console.log(`[iiko] Available pricelists: ${pricelists.length}`);
+    pricelists.forEach((pl, i) => {
+      console.log(`[iiko]   [${i}] "${pl.name}" (id: ${pl.id})`);
+    });
+
+    // Берём первый активный pricelist
+    let priceMap = {};
+    if (pricelists.length > 0) {
+      const pricelist = pricelists[0];
+      console.log(`[iiko] Using pricelist: "${pricelist.name}"`);
       
-      console.log('[iiko] deliveries/menu keys:', Object.keys(resp3.data));
-      if (resp3.data.categories) {
-        console.log('[iiko] deliveries/menu categories:', resp3.data.categories.length);
-      }
-      if (resp3.data.products) {
-        console.log('[iiko] deliveries/menu products:', resp3.data.products.length);
-        resp3.data.products.slice(0, 5).forEach((p, i) => {
-          console.log(`[iiko]   [${i}] "${p.name}" price=${p.price}`);
+      // 3. ПОЛУЧАЕМ ЦЕНЫ ИЗ ЭТОГО PRICELIST
+      try {
+        const pricesResp = await axios.get(
+          `${process.env.IIKO_API_BASE}/api/1/pricelists/${pricelist.id}`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+
+        console.log('[iiko] Loading prices from pricelist...');
+        const items = pricesResp.data.items || [];
+        console.log(`[iiko] Items in pricelist: ${items.length}`);
+
+        // Создаём map: productId -> price
+        items.forEach(item => {
+          if (item.productId && item.price !== undefined) {
+            priceMap[item.productId] = item.price;
+          }
         });
+
+        console.log(`[iiko] Price map created: ${Object.keys(priceMap).length} products with prices`);
+      } catch (e) {
+        console.error('[iiko] Error loading pricelist items:', e.message);
       }
-    } catch (e) {
-      console.log('[iiko] /deliveries/menu error:', e.message);
     }
 
-    // 4. COMBO LIST
-    try {
-      console.log('[iiko] 4. Trying /combo_list...');
-      const resp4 = await axios.get(`${process.env.IIKO_API_BASE}/api/1/combo_list`, {
-        params: { organizationId: process.env.IIKO_ORG_ID },
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      
-      console.log('[iiko] combo_list keys:', Object.keys(resp4.data));
-    } catch (e) {
-      console.log('[iiko] /combo_list error:', e.message);
+    // ===== МЕРДЖИМ: товары + цены из прайс-листа =====
+    const categoryMap = {};
+    productCategories.forEach(pc => {
+      categoryMap[pc.id] = pc.name;
+    });
+
+    const categories = [];
+    const categorySet = new Set();
+
+    // ===== БЕРЁМ ВСЕ товары и подставляем цены из прайс-листа =====
+    const products = activeProducts
+      .map(p => {
+        // Берём цену ИЗ ПРАЙС-ЛИСТА (главный источник!)
+        let price = priceMap[p.id];
+
+        if (price === undefined) {
+          // Fallback: если нет в priceList, берём из sizePrices
+          price = null;
+          if (p.sizePrices) {
+            for (const sp of p.sizePrices) {
+              if (sp.price?.currentPrice > 0) {
+                price = sp.price.currentPrice;
+                break;
+              }
+            }
+          }
+          price = price || 0; // Если нет цены вообще, ставим 0
+        }
+
+        const categoryId = p.parentGroup || 'default';
+        const categoryName = categoryMap[categoryId] || 'Товары';
+        categorySet.add(categoryId);
+
+        return {
+          id: p.id,
+          name: p.name,
+          price: Math.round(price * 100) / 100,
+          categoryId,
+          categoryName
+        };
+      })
+      .filter(p => p.price > 0); // Показываем только товары с ценой > 0
+
+    // ===== СОЗДАЁМ СПИСОК КАТЕГОРИЙ =====
+    categorySet.forEach(cid => {
+      const catName = categoryMap[cid] || 'Товары';
+      categories.push({ id: cid, name: catName });
+    });
+
+    console.log('[iiko] ========== ALL PRODUCTS WITH PRICES ==========');
+    products.slice(0, 40).forEach((p, i) => {
+      const priceStr = p.price > 0 ? `${p.price} ₽` : 'По запросу';
+      console.log(`[iiko] [${i}] "${p.name}" | price: ${priceStr} | category: ${p.categoryName}`);
+    });
+    if (products.length > 40) {
+      console.log(`[iiko] ... and ${products.length - 40} more`);
     }
+    console.log('[iiko] =============================================');
 
-    console.log('[iiko] ==========================================');
+    console.log(`[iiko] ✓ Final menu: ${categories.length} categories, ${products.length} products`);
 
-    db.data.menu = FALLBACK;
+    db.data.menu = { categories, products };
     await db.write();
-    return null;
+
+    return { categories, products };
 
   } catch (e) {
-    console.error('[iiko] error:', e.message);
+    console.error('[iiko] menu load failed:', e.message);
+    console.log('[db] using FALLBACK menu');
     return null;
   }
 }
@@ -164,6 +221,8 @@ const FALLBACK = {
     { id: 'p3', name: 'Картофель фри', price: 150, categoryId: 'c2', categoryName: 'Закуски' },
   ]
 };
+
+// ===== API ENDPOINTS =====
 
 app.post('/api/bootstrap', async (req, res) => {
   const { initData } = req.body || {};
@@ -307,12 +366,61 @@ app.post('/api/whoami', (req, res) => {
   res.json({ ok: true, user });
 });
 
+// ===== DEBUG ENDPOINT =====
+app.get('/api/debug/iiko-raw', async (req, res) => {
+  try {
+    const token = await getIikoToken();
+    if (!token) return res.json({ error: 'No token' });
+
+    const nomResp = await axios.post(`${process.env.IIKO_API_BASE}/api/1/nomenclature`, {
+      organizationId: process.env.IIKO_ORG_ID
+    }, { headers: { Authorization: `Bearer ${token}` } });
+
+    // Логируем ВСЮ информацию
+    console.log('[DEBUG] ===== GROUPS =====');
+    (nomResp.data.groups || []).forEach((g, i) => {
+      console.log(`[${i}] id: ${g.id} | name: ${g.name} | parent: ${g.parentGroup}`);
+    });
+
+    console.log('[DEBUG] ===== PRODUCT CATEGORIES =====');
+    (nomResp.data.productCategories || []).forEach((pc, i) => {
+      console.log(`[${i}] id: ${pc.id} | name: ${pc.name}`);
+    });
+
+    console.log('[DEBUG] ===== ALL PRODUCTS =====');
+    const allProds = nomResp.data.products || [];
+    console.log(`Total: ${allProds.length}`);
+    
+    allProds.forEach((p, i) => {
+      const categoryId = p.parentGroup ? p.parentGroup : 'NO_CATEGORY';
+      console.log(`[${i}] "${p.name}" | category: ${categoryId} | deleted: ${p.isDeleted}`);
+    });
+
+    res.json({
+      groupsCount: (nomResp.data.groups || []).length,
+      categoriesCount: (nomResp.data.productCategories || []).length,
+      productsCount: allProds.length,
+      products: allProds.map(p => ({
+        id: p.id,
+        name: p.name,
+        parentGroup: p.parentGroup,
+        isDeleted: p.isDeleted
+      }))
+    });
+
+  } catch (e) {
+    res.json({ error: e.message });
+  }
+});
+
+// ===== START SERVER =====
 async function start() {
   await db.read();
   
   const menuLoaded = await fetchIikoMenu();
   if (!menuLoaded) {
-    console.log('[db] using FALLBACK menu');
+    db.data.menu = FALLBACK;
+    await db.write();
   }
 
   const PORT = process.env.PORT || 3000;
