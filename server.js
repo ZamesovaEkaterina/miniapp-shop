@@ -75,6 +75,9 @@ async function geocodeAddress(address) {
   if (query.length < 5) throw Object.assign(new Error('Введите улицу и номер дома'), { status: 400 });
 
   const response = await axios.get('https://geocode-maps.yandex.ru/v1/', {
+    headers: {
+      Referer: process.env.PUBLIC_APP_URL || 'https://miniapp-shop.onrender.com/',
+    },
     params: {
       apikey: process.env.YANDEX_GEOCODER_API_KEY,
       geocode: /раменск/i.test(query) ? query : `Раменское, ${query}`,
