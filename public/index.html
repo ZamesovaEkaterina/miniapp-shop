@@ -3,7 +3,8 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>Mini Shop</title>
+  <title>Бар Борода — доставка</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <style>
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin:0; }
     header { position: sticky; top:0; background:#fff; border-bottom:1px solid #eee; padding:12px 16px; }
@@ -16,7 +17,13 @@
     .cart { position:fixed; bottom:0; left:0; right:0; border-top:1px solid #eee; background:#fff; padding:10px 16px; display:flex; justify-content:space-between; align-items:center; }
     .hidden { display:none; }
     label { display:block; margin:8px 0 4px; font-size:14px; }
-    select, input { width:100%; padding:10px; border:1px solid #ddd; border-radius:8px; }
+    select, input { width:100%; padding:12px; border:1px solid #ddd; border-radius:8px; box-sizing:border-box; font-size:16px; }
+    button { font:inherit; }
+    .primary { width:100%; padding:13px; border:0; border-radius:10px; background:#6d45b5; color:white; font-weight:700; }
+    .primary:disabled { opacity:.5; }
+    .delivery-status { margin:10px 0; padding:10px; border-radius:8px; background:#f4f4f4; font-size:14px; }
+    .delivery-status.ok { color:#176b2c; background:#ecf8ef; }
+    .delivery-status.error { color:#a51d1d; background:#fff0f0; }
     #screen-checkout, #screen-profile { padding:12px 16px; }
     nav { display:flex; gap:8px; padding:8px 16px; border-top:1px solid #eee; }
     nav button { flex:1; padding:10px; }
@@ -47,7 +54,7 @@
   ">
     <div style="text-align: center; color: white;">
       <h1 style="font-size: 64px; margin: 0 0 20px 0;">🍔</h1>
-      <h2 style="margin: 0; font-size: 28px; font-weight: 600;">Mini Shop</h2>
+      <h2 style="margin: 0; font-size: 28px; font-weight: 600;">Бар Борода</h2>
       <p style="margin: 15px 0 0 0; font-size: 14px; opacity: 0.85; letter-spacing: 0.5px;">Подождите, страница загружается...</p>
       <div style="margin-top: 30px; display: flex; gap: 10px; justify-content: center;">
         <div style="width: 10px; height: 10px; background: white; border-radius: 50%; animation: pulse 1.5s infinite;"></div>
@@ -61,7 +68,7 @@
   <div id="app" style="display: none;">
 
     <header>
-      <strong>Mini Shop</strong>
+      <strong>Бар Борода — доставка</strong>
       <div id="tg-hint" style="font-size:12px; color:#666"></div>
     </header>
 
@@ -73,26 +80,27 @@
     <div id="screen-checkout" class="hidden">
       <h3>Оформление</h3>
 
-      <label>Зона/город доставки</label>
-      <select id="delivery-zone">
-        <option value="pickup">Самовывоз (0 ₽)</option>
-        <option value="zone1">Зона 1 (+100 ₽)</option>
-        <option value="zone2">Зона 2 (+200 ₽)</option>
-      </select>
-
-      <label>Способ</label>
+      <label>Как получить заказ</label>
       <select id="delivery-method">
         <option value="courier">Курьер</option>
         <option value="pickup">Самовывоз</option>
       </select>
 
+      <label>Ваше имя</label>
+      <input id="customer-name" autocomplete="name" placeholder="Имя"/>
+
+      <label>Телефон</label>
+      <input id="customer-phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="+7 999 123-45-67"/>
+
       <div id="address-wrap">
-        <label>Адрес (для курьера)</label>
-        <input id="address" placeholder="Улица, дом, квартира"/>
+        <label>Адрес доставки</label>
+        <input id="address" autocomplete="street-address" placeholder="Раменское, улица, дом"/>
+        <button id="btn-check-address" class="pill" type="button" style="margin-top:8px">Проверить адрес</button>
+        <div id="delivery-status" class="delivery-status">Введите адрес — мы автоматически определим зону и стоимость.</div>
       </div>
 
       <h4>Итого: <span id="total-sum">0</span> ₽</h4>
-      <button id="btn-place" class="pill">Отправить заказ</button>
+      <button id="btn-place" class="primary">Отправить заказ</button>
     </div>
 
     <div id="screen-profile" class="hidden">
@@ -124,7 +132,7 @@
     if (tg) { tg.expand(); document.getElementById('tg-hint').textContent = 'Mini App открыт внутри Telegram'; }
     else { document.getElementById('tg-hint').textContent = 'Запусти через Telegram, чтобы видеть профиль'; }
 
-    const state = { user:null, categories:[], products:[], cart:[], deliveryFee:0 };
+    const state = { user:null, categories:[], products:[], cart:[], deliveryFee:0, deliveryQuote:null };
 
     const scrCatalog = document.getElementById('screen-catalog');
     const scrCheckout = document.getElementById('screen-checkout');
@@ -142,6 +150,7 @@
         const res = await fetch('/api/bootstrap',{ method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({initData}) });
         const data = await res.json();
         state.user = data.user;
+        if (data.user?.first_name) document.getElementById('customer-name').value = data.user.first_name;
         
         if (!data.products || !data.products.length) {
           console.log('No products in bootstrap, fetching from /api/menu');
@@ -218,29 +227,87 @@
       document.getElementById('total-sum').textContent=sum;
     }
 
-    const selectZone=document.getElementById('delivery-zone');
     const selectMethod=document.getElementById('delivery-method');
     const addressWrap=document.getElementById('address-wrap');
+    const addressInput=document.getElementById('address');
+    const deliveryStatus=document.getElementById('delivery-status');
+    const checkAddressButton=document.getElementById('btn-check-address');
     function recalcDelivery(){
-      const zone=selectZone.value; const method=selectMethod.value;
+      const method=selectMethod.value;
       addressWrap.style.display=(method==='courier')?'block':'none';
-      let fee=0; if(method==='courier'){ if(zone==='zone1') fee=100; if(zone==='zone2') fee=200; }
-      state.deliveryFee=fee; updateCartBar();
+      if(method==='pickup') {
+        state.deliveryQuote={available:true,zone:null,fee:0};
+        state.deliveryFee=0;
+      } else {
+        state.deliveryQuote=null;
+        state.deliveryFee=0;
+        deliveryStatus.className='delivery-status';
+        deliveryStatus.textContent='Введите адрес — мы автоматически определим зону и стоимость.';
+      }
+      updateCartBar();
     }
-    selectZone.onchange=recalcDelivery; selectMethod.onchange=recalcDelivery; recalcDelivery();
+    selectMethod.onchange=recalcDelivery; recalcDelivery();
+
+    addressInput.oninput=()=>{
+      state.deliveryQuote=null;
+      state.deliveryFee=0;
+      deliveryStatus.className='delivery-status';
+      deliveryStatus.textContent='Адрес изменён. Нажмите «Проверить адрес».';
+      updateCartBar();
+    };
+
+    async function checkAddress(){
+      const address=addressInput.value.trim();
+      if(!address){ deliveryStatus.className='delivery-status error'; deliveryStatus.textContent='Введите улицу и номер дома.'; return null; }
+      checkAddressButton.disabled=true;
+      deliveryStatus.className='delivery-status';
+      deliveryStatus.textContent='Проверяем адрес…';
+      try {
+        const res=await fetch('/api/delivery/quote',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({address})});
+        const data=await res.json();
+        if(!res.ok || !data.available) throw new Error(data.error || 'Адрес находится вне зоны доставки');
+        state.deliveryQuote=data;
+        state.deliveryFee=data.fee;
+        deliveryStatus.className='delivery-status ok';
+        deliveryStatus.textContent=`${data.zoneName}: доставка ${data.fee} ₽. ${data.formattedAddress}`;
+        updateCartBar();
+        return data;
+      } catch(error) {
+        state.deliveryQuote=null; state.deliveryFee=0; updateCartBar();
+        deliveryStatus.className='delivery-status error';
+        deliveryStatus.textContent=error.message;
+        return null;
+      } finally { checkAddressButton.disabled=false; }
+    }
+    checkAddressButton.onclick=checkAddress;
 
     document.getElementById('btn-place').onclick=async()=>{
       const initData=tg?.initData||'';
-      const payload={ initData, items:state.cart, delivery:{ method:selectMethod.value, zone:selectZone.value, address:document.getElementById('address').value||null }};
+      if(!state.cart.length){ alert('Корзина пуста'); return; }
+      if(selectMethod.value==='courier' && !state.deliveryQuote){
+        const quote=await checkAddress(); if(!quote) return;
+      }
+      const button=document.getElementById('btn-place'); button.disabled=true; button.textContent='Отправляем…';
+      const payload={
+        initData,
+        items:state.cart,
+        customer:{name:document.getElementById('customer-name').value,phone:document.getElementById('customer-phone').value},
+        delivery:{method:selectMethod.value,address:addressInput.value||null}
+      };
       const res=await fetch('/api/orders',{ method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload) });
       const data=await res.json();
-      if(data.ok){ alert('Заказ создан #'+data.orderNumber); state.cart=[]; updateCartBar(); show(scrProfile); await loadOrders(); }
+      button.disabled=false; button.textContent='Отправить заказ';
+      if(data.ok){ alert('Заказ создан #'+data.orderNumber); state.cart=[]; updateCartBar(); if(tg?.initData){ show(scrProfile); await loadOrders(); } }
       else { alert('Ошибка: '+data.error); }
     };
     document.getElementById('to-checkout').onclick=()=>show(scrCheckout);
     document.getElementById('to-profile').onclick=()=>show(scrProfile);
 
-    async function loadOrders(){ const r=await fetch('/api/orders'); const d=await r.json(); renderOrders(d.orders||[]); }
+    async function loadOrders(){
+      if(!tg?.initData) return renderOrders([]);
+      const r=await fetch('/api/orders/mine',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({initData:tg.initData})});
+      const d=await r.json(); renderOrders(d.orders||[]);
+    }
     
     function renderProfile(user){ const el=document.getElementById('profile'); if(!user){ el.textContent='Гость'; return; }
       el.innerHTML=`<div>Привет, ${user.first_name||'друг'}!</div><div style="font-size:12px;color:#666">Ваш Telegram ID: ${user.id}</div>`;

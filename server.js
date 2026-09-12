@@ -12,14 +12,19 @@ console.log('[ENV]', {
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
+const path = require('path');
 const axios = require('axios');
 const { Low } = require('lowdb');
 const { JSONFile } = require('lowdb/node');
 const { nanoid } = require('nanoid');
+const { findDeliveryZone, loadDeliveryZones } = require('./lib/delivery-zones');
+
+const deliveryZones = loadDeliveryZones(path.join(__dirname, 'data', 'delivery-zones.geojson'));
 
 const app = express();
+app.disable('x-powered-by');
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '100kb' }));
 app.use(express.static('public'));
 
 const db = new Low(new JSONFile('.db.json'), { users: {}, orders: [], menu: { categories: [], products: [] } });
@@ -41,7 +46,67 @@ function validateInitData(initData) {
     .update(dataCheckString)
     .digest('hex');
   const hash = params.get('hash');
-  return { ok: hmac === hash, reason: hmac === hash ? null : 'hash_mismatch' };
+  if (!hash || hmac !== hash) return { ok: false, reason: 'hash_mismatch' };
+  const authDate = Number(params.get('auth_date'));
+  if (!authDate || Date.now() / 1000 - authDate > 24 * 60 * 60) return { ok: false, reason: 'expired' };
+  return { ok: true, reason: null };
+}
+
+function getTelegramUser(initData, { optional = false } = {}) {
+  if (!initData && optional) return null;
+  const validation = validateInitData(initData);
+  if (!validation.ok) throw Object.assign(new Error('Недействительные данные Telegram'), { status: 401 });
+  const raw = new URLSearchParams(initData).get('user');
+  return raw ? JSON.parse(raw) : null;
+}
+
+function normalizePhone(value) {
+  const digits = String(value || '').replace(/\D/g, '');
+  if (digits.length < 10 || digits.length > 15) return null;
+  return `+${digits}`;
+}
+
+async function geocodeAddress(address) {
+  if (!process.env.YANDEX_GEOCODER_API_KEY) {
+    throw Object.assign(new Error('Проверка адреса пока не подключена'), { status: 503, code: 'GEOCODER_NOT_CONFIGURED' });
+  }
+
+  const query = String(address || '').trim();
+  if (query.length < 5) throw Object.assign(new Error('Введите улицу и номер дома'), { status: 400 });
+
+  const response = await axios.get('https://geocode-maps.yandex.ru/v1/', {
+    params: {
+      apikey: process.env.YANDEX_GEOCODER_API_KEY,
+      geocode: /раменск/i.test(query) ? query : `Раменское, ${query}`,
+      format: 'json',
+      lang: 'ru_RU',
+      results: 1,
+    },
+    timeout: 8000,
+  });
+  const member = response.data?.response?.GeoObjectCollection?.featureMember?.[0];
+  const position = member?.GeoObject?.Point?.pos?.split(' ').map(Number);
+  if (!position || position.length !== 2 || !position.every(Number.isFinite)) {
+    throw Object.assign(new Error('Адрес не найден. Проверьте улицу и номер дома'), { status: 404 });
+  }
+
+  return {
+    longitude: position[0],
+    latitude: position[1],
+    formattedAddress: member.GeoObject?.metaDataProperty?.GeocoderMetaData?.text || query,
+  };
+}
+
+async function quoteDelivery(address) {
+  const location = await geocodeAddress(address);
+  const zone = findDeliveryZone(deliveryZones, location.longitude, location.latitude);
+  return {
+    available: Boolean(zone),
+    zone: zone?.code || null,
+    zoneName: zone?.name || null,
+    fee: zone?.fee || 0,
+    formattedAddress: location.formattedAddress,
+  };
 }
 
 let iikoToken = null;
@@ -260,18 +325,41 @@ app.get('/api/menu', async (req, res) => {
   }
 });
 
-app.get('/api/orders', (req, res) => {
-  res.json({ orders: db.data.orders.slice(-20).reverse() });
+app.post('/api/delivery/quote', async (req, res) => {
+  try {
+    const quote = await quoteDelivery(req.body?.address);
+    res.json(quote);
+  } catch (error) {
+    console.error('[delivery quote]', error.response?.data || error.message);
+    res.status(error.status || 502).json({ available: false, error: error.message });
+  }
+});
+
+app.post('/api/orders/mine', async (req, res) => {
+  try {
+    const user = getTelegramUser(req.body?.initData);
+    const orders = db.data.orders
+      .filter(order => order.userId === user?.id)
+      .slice(-20)
+      .reverse();
+    res.json({ orders });
+  } catch (error) {
+    res.status(error.status || 401).json({ orders: [], error: error.message });
+  }
 });
 
 app.post('/api/orders', async (req, res) => {
   try {
-    const { initData, items, delivery } = req.body || {};
-    const v = validateInitData(initData);
-    if (!v.ok) return res.status(401).json({ ok: false, error: 'initData invalid' });
+    if (!process.env.ORDER_CHAT_ID && process.env.IIKO_ORDER_ENABLED !== 'true') {
+      return res.status(503).json({ ok: false, error: 'Приём заказов ещё настраивается. Попробуйте чуть позже' });
+    }
+    const { initData, items, delivery, customer } = req.body || {};
+    const user = getTelegramUser(initData, { optional: true });
+    const customerName = String(customer?.name || user?.first_name || '').trim();
+    const customerPhone = normalizePhone(customer?.phone);
 
-    const params = new URLSearchParams(initData);
-    const user = JSON.parse(params.get('user') || '{}');
+    if (customerName.length < 2) return res.status(400).json({ ok: false, error: 'Укажите имя' });
+    if (!customerPhone) return res.status(400).json({ ok: false, error: 'Укажите корректный телефон' });
 
     if (!Array.isArray(items) || !items.length) {
       return res.json({ ok: false, error: 'Пустая корзина' });
@@ -290,9 +378,23 @@ app.post('/api/orders', async (req, res) => {
       lines.push({ id: prod.id, name: prod.name, price: prod.price, qty });
     }
 
-    const fee = (delivery?.method === 'courier')
-      ? (delivery?.zone === 'zone2' ? 200 : delivery?.zone === 'zone1' ? 100 : 0)
-      : 0;
+    const method = delivery?.method === 'pickup' ? 'pickup' : 'courier';
+    let verifiedDelivery = { method: 'pickup', fee: 0, address: null, zone: null, zoneName: null };
+    if (method === 'courier') {
+      const quote = await quoteDelivery(delivery?.address);
+      if (!quote.available) {
+        return res.status(400).json({ ok: false, error: 'Этот адрес находится вне зоны доставки' });
+      }
+      verifiedDelivery = {
+        method,
+        fee: quote.fee,
+        address: quote.formattedAddress,
+        zone: quote.zone,
+        zoneName: quote.zoneName,
+      };
+    }
+
+    const fee = verifiedDelivery.fee;
 
     const total = Math.round((subtotal + fee) * 100) / 100;
 
@@ -301,8 +403,9 @@ app.post('/api/orders', async (req, res) => {
       id: nanoid(),
       number: orderNumber,
       userId: user?.id || null,
+      customer: { name: customerName, phone: customerPhone },
       items: lines,
-      delivery: { ...delivery, fee },
+      delivery: verifiedDelivery,
       subtotal,
       total,
       status: 'created',
@@ -313,16 +416,17 @@ app.post('/api/orders', async (req, res) => {
     db.data.orders.push(record);
     await db.write();
 
-    sendOrderToIiko(record, user).catch(e => console.error('[iiko] order send failed', e));
+    sendOrderToIiko(record).catch(e => console.error('[iiko] order send failed', e));
+    notifyOrderChat(record).catch(e => console.error('[telegram] order notification failed', e));
 
     res.json({ ok: true, orderNumber, total });
   } catch (e) {
     console.error('[POST /api/orders] error', e);
-    res.json({ ok: false, error: e.message });
+    res.status(e.status || 500).json({ ok: false, error: e.message });
   }
 });
 
-async function sendOrderToIiko(order, user) {
+async function sendOrderToIiko(order) {
   const token = await getIikoToken();
   if (!token) {
     console.log('[iiko] no token, skipping order send');
@@ -333,10 +437,9 @@ async function sendOrderToIiko(order, user) {
     const payload = {
       organizationId: process.env.IIKO_ORG_ID,
       order: {
-        phone: user?.phone || '',
+        phone: order.customer.phone,
         customer: {
-          name: `${user?.first_name || ''} ${user?.last_name || ''}`.trim() || 'Guest',
-          id: user?.id?.toString() || null
+          name: order.customer.name,
         },
         items: order.items.map(i => ({
           productId: i.id,
@@ -357,6 +460,29 @@ async function sendOrderToIiko(order, user) {
   }
 }
 
+async function notifyOrderChat(order) {
+  if (!process.env.BOT_TOKEN || !process.env.ORDER_CHAT_ID) return false;
+  const items = order.items.map(item => `${item.qty} × ${item.name} — ${item.price * item.qty} ₽`).join('\n');
+  const delivery = order.delivery.method === 'courier'
+    ? `${order.delivery.zoneName}, ${order.delivery.fee} ₽\n${order.delivery.address}`
+    : 'Самовывоз, 0 ₽';
+  const text = [
+    `Новый заказ №${order.number}`,
+    `${order.customer.name}, ${order.customer.phone}`,
+    '',
+    items,
+    '',
+    delivery,
+    `Итого: ${order.total} ₽`,
+  ].join('\n');
+
+  await axios.post(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`, {
+    chat_id: process.env.ORDER_CHAT_ID,
+    text,
+  }, { timeout: 8000 });
+  return true;
+}
+
 app.post('/api/whoami', (req, res) => {
   const { initData } = req.body || {};
   const v = validateInitData(initData);
@@ -366,8 +492,9 @@ app.post('/api/whoami', (req, res) => {
   res.json({ ok: true, user });
 });
 
-// ===== DEBUG ENDPOINT =====
+// ===== DEBUG ENDPOINT (выключен в рабочей среде по умолчанию) =====
 app.get('/api/debug/iiko-raw', async (req, res) => {
+  if (process.env.ENABLE_DEBUG_ENDPOINTS !== 'true') return res.status(404).json({ error: 'Not found' });
   try {
     const token = await getIikoToken();
     if (!token) return res.json({ error: 'No token' });
