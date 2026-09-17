@@ -18,6 +18,7 @@ const { Low } = require('lowdb');
 const { JSONFile } = require('lowdb/node');
 const { nanoid } = require('nanoid');
 const { findDeliveryZone, loadDeliveryZones } = require('./lib/delivery-zones');
+const { mapExternalMenu } = require('./lib/iiko-menu');
 
 const deliveryZones = loadDeliveryZones(path.join(__dirname, 'data', 'delivery-zones.geojson'));
 
@@ -134,137 +135,62 @@ async function getIikoToken() {
   }
 }
 
-// ===== FETCH IIKO MENU - БЕРЁМ ВСЮ НОМЕНКЛАТУРУ + ЦЕНЫ ИЗ ПРАЙС-ЛИСТА =====
+async function fetchStoppedProductIds(token) {
+  try {
+    const response = await axios.post(`${process.env.IIKO_API_BASE}/api/1/stop_lists`, {
+      organizationIds: [process.env.IIKO_ORG_ID],
+    }, { headers: { Authorization: `Bearer ${token}` }, timeout: 8000 });
+
+    const stopped = new Set();
+    for (const organization of response.data?.terminalGroupStopLists || []) {
+      for (const terminalGroup of organization?.items || []) {
+        for (const item of terminalGroup?.items || []) {
+          if (item?.productId) stopped.add(item.productId);
+        }
+      }
+    }
+    console.log(`[iiko] Stop-list items: ${stopped.size}`);
+    return stopped;
+  } catch (error) {
+    console.warn('[iiko] stop-list load failed; menu will be shown without stop-list filtering:', error.response?.data || error.message);
+    return new Set();
+  }
+}
+
+// ===== FETCH IIKO EXTERNAL MENU — ТОЛЬКО БЛЮДА ДЛЯ ДОСТАВКИ =====
 async function fetchIikoMenu() {
   try {
     const token = await getIikoToken();
     if (!token) throw new Error('No iiko token');
 
-    console.log('[iiko] Loading nomenclature...');
-
-    // 1. ПОЛУЧАЕМ НОМЕНКЛАТУРУ (ВСЕ товары, не только те что в меню)
-    const nomResp = await axios.post(`${process.env.IIKO_API_BASE}/api/1/nomenclature`, {
-      organizationId: process.env.IIKO_ORG_ID
-    }, { headers: { Authorization: `Bearer ${token}` } });
-
-    const allProducts = nomResp.data.products || [];
-    const productCategories = nomResp.data.productCategories || [];
-
-    console.log(`[iiko] Total products in nomenclature: ${allProducts.length}`);
-
-    // ===== ФИЛЬТРУЕМ: Только не удалённые товары (не смотрим на isIncludedInMenu!) =====
-    const activeProducts = allProducts.filter(p => !p.isDeleted);
-    console.log(`[iiko] Active products (not deleted): ${activeProducts.length}`);
-
-    // 2. ПОЛУЧАЕМ PRICELISTS (текущие цены)
-    console.log('[iiko] Loading pricelists...');
-    let pricelistResp;
-    try {
-      pricelistResp = await axios.get(`${process.env.IIKO_API_BASE}/api/1/pricelists`, {
-        params: { organizationId: process.env.IIKO_ORG_ID },
-        headers: { Authorization: `Bearer ${token}` }
-      });
-    } catch (e) {
-      console.log('[iiko] pricelists error:', e.message);
-      pricelistResp = { data: { pricelists: [] } };
-    }
-
-    const pricelists = pricelistResp.data.pricelists || [];
-    console.log(`[iiko] Available pricelists: ${pricelists.length}`);
-    pricelists.forEach((pl, i) => {
-      console.log(`[iiko]   [${i}] "${pl.name}" (id: ${pl.id})`);
+    console.log('[iiko] Loading external menus...');
+    const menusResponse = await axios.post(`${process.env.IIKO_API_BASE}/api/2/menu`, {}, {
+      headers: { Authorization: `Bearer ${token}` }, timeout: 8000,
     });
+    const externalMenus = menusResponse.data?.externalMenus || [];
+    if (!externalMenus.length) throw new Error('No external menus returned by iiko');
 
-    // Берём первый активный pricelist
-    let priceMap = {};
-    if (pricelists.length > 0) {
-      const pricelist = pricelists[0];
-      console.log(`[iiko] Using pricelist: "${pricelist.name}"`);
-      
-      // 3. ПОЛУЧАЕМ ЦЕНЫ ИЗ ЭТОГО PRICELIST
-      try {
-        const pricesResp = await axios.get(
-          `${process.env.IIKO_API_BASE}/api/1/pricelists/${pricelist.id}`,
-          { headers: { Authorization: `Bearer ${token}` } }
-        );
+    const requestedMenuId = process.env.IIKO_EXTERNAL_MENU_ID;
+    const externalMenu = requestedMenuId
+      ? externalMenus.find(menu => menu.id === requestedMenuId)
+      : externalMenus[0];
+    if (!externalMenu) throw new Error(`Configured external menu ${requestedMenuId} was not returned by iiko`);
+    console.log(`[iiko] Using external menu: "${externalMenu.name}" (${externalMenu.id})`);
 
-        console.log('[iiko] Loading prices from pricelist...');
-        const items = pricesResp.data.items || [];
-        console.log(`[iiko] Items in pricelist: ${items.length}`);
+    const [externalMenuResponse, stoppedProductIds] = await Promise.all([
+      axios.post(`${process.env.IIKO_API_BASE}/api/2/menu/by_id`, {
+        externalMenuId: externalMenu.id,
+        organizationIds: [process.env.IIKO_ORG_ID],
+      }, { headers: { Authorization: `Bearer ${token}` }, timeout: 12000 }),
+      fetchStoppedProductIds(token),
+    ]);
 
-        // Создаём map: productId -> price
-        items.forEach(item => {
-          if (item.productId && item.price !== undefined) {
-            priceMap[item.productId] = item.price;
-          }
-        });
-
-        console.log(`[iiko] Price map created: ${Object.keys(priceMap).length} products with prices`);
-      } catch (e) {
-        console.error('[iiko] Error loading pricelist items:', e.message);
-      }
-    }
-
-    // ===== МЕРДЖИМ: товары + цены из прайс-листа =====
-    const categoryMap = {};
-    productCategories.forEach(pc => {
-      categoryMap[pc.id] = pc.name;
+    const { categories, products } = mapExternalMenu(externalMenuResponse.data, {
+      organizationId: process.env.IIKO_ORG_ID,
+      stoppedProductIds,
     });
-
-    const categories = [];
-    const categorySet = new Set();
-
-    // ===== БЕРЁМ ВСЕ товары и подставляем цены из прайс-листа =====
-    const products = activeProducts
-      .map(p => {
-        // Берём цену ИЗ ПРАЙС-ЛИСТА (главный источник!)
-        let price = priceMap[p.id];
-
-        if (price === undefined) {
-          // Fallback: если нет в priceList, берём из sizePrices
-          price = null;
-          if (p.sizePrices) {
-            for (const sp of p.sizePrices) {
-              if (sp.price?.currentPrice > 0) {
-                price = sp.price.currentPrice;
-                break;
-              }
-            }
-          }
-          price = price || 0; // Если нет цены вообще, ставим 0
-        }
-
-        const categoryId = p.parentGroup || 'default';
-        const categoryName = categoryMap[categoryId] || 'Товары';
-        categorySet.add(categoryId);
-
-        return {
-          id: p.id,
-          name: p.name,
-          price: Math.round(price * 100) / 100,
-          categoryId,
-          categoryName
-        };
-      })
-      .filter(p => p.price > 0); // Показываем только товары с ценой > 0
-
-    // ===== СОЗДАЁМ СПИСОК КАТЕГОРИЙ =====
-    categorySet.forEach(cid => {
-      const catName = categoryMap[cid] || 'Товары';
-      categories.push({ id: cid, name: catName });
-    });
-
-    console.log('[iiko] ========== ALL PRODUCTS WITH PRICES ==========');
-    products.slice(0, 40).forEach((p, i) => {
-      const priceStr = p.price > 0 ? `${p.price} ₽` : 'По запросу';
-      console.log(`[iiko] [${i}] "${p.name}" | price: ${priceStr} | category: ${p.categoryName}`);
-    });
-    if (products.length > 40) {
-      console.log(`[iiko] ... and ${products.length - 40} more`);
-    }
-    console.log('[iiko] =============================================');
-
-    console.log(`[iiko] ✓ Final menu: ${categories.length} categories, ${products.length} products`);
+    if (!products.length) throw new Error('External menu contains no available products with prices');
+    console.log(`[iiko] ✓ External menu loaded: ${categories.length} categories, ${products.length} products`);
 
     db.data.menu = { categories, products };
     await db.write();
@@ -378,7 +304,7 @@ app.post('/api/orders', async (req, res) => {
       if (!prod) return res.json({ ok: false, error: `Товар не найден: ${it.id}` });
       const qty = Math.max(1, parseInt(it.qty || 1, 10));
       subtotal += prod.price * qty;
-      lines.push({ id: prod.id, name: prod.name, price: prod.price, qty });
+      lines.push({ id: prod.id, sizeId: prod.sizeId || null, name: prod.name, price: prod.price, qty });
     }
 
     const method = delivery?.method === 'pickup' ? 'pickup' : 'courier';
@@ -446,6 +372,7 @@ async function sendOrderToIiko(order) {
         },
         items: order.items.map(i => ({
           productId: i.id,
+          ...(i.sizeId ? { sizeId: i.sizeId } : {}),
           amount: i.qty
         }))
       }
