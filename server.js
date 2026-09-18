@@ -204,6 +204,14 @@ async function fetchIikoMenu() {
   }
 }
 
+let menuRefreshPromise = null;
+function refreshIikoMenu() {
+  if (!menuRefreshPromise) {
+    menuRefreshPromise = fetchIikoMenu().finally(() => { menuRefreshPromise = null; });
+  }
+  return menuRefreshPromise;
+}
+
 const FALLBACK = {
   categories: [
     { id: 'c1', name: 'Бургеры' },
@@ -248,6 +256,7 @@ app.get('/api/menu', async (req, res) => {
   try {
     await db.read();
     const menu = db.data?.menu || { categories: [], products: [] };
+    res.set('Cache-Control', 'no-store');
     res.json(menu);
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -282,13 +291,16 @@ app.post('/api/orders', async (req, res) => {
     if (!process.env.ORDER_CHAT_ID && process.env.IIKO_ORDER_ENABLED !== 'true') {
       return res.status(503).json({ ok: false, error: 'Приём заказов ещё настраивается. Попробуйте чуть позже' });
     }
-    const { initData, items, delivery, customer } = req.body || {};
+    const { initData, items, delivery, customer, legal } = req.body || {};
     const user = getTelegramUser(initData, { optional: true });
     const customerName = String(customer?.name || user?.first_name || '').trim();
     const customerPhone = normalizePhone(customer?.phone);
 
     if (customerName.length < 2) return res.status(400).json({ ok: false, error: 'Укажите имя' });
     if (!customerPhone) return res.status(400).json({ ok: false, error: 'Укажите корректный телефон' });
+    if (legal?.personalDataConsent !== true || legal?.privacyAccepted !== true) {
+      return res.status(400).json({ ok: false, error: 'Необходимо подтвердить согласие на обработку персональных данных и ознакомление с политикой' });
+    }
 
     if (!Array.isArray(items) || !items.length) {
       return res.json({ ok: false, error: 'Пустая корзина' });
@@ -335,6 +347,13 @@ app.post('/api/orders', async (req, res) => {
       customer: { name: customerName, phone: customerPhone },
       items: lines,
       delivery: verifiedDelivery,
+      legal: {
+        personalDataConsent: true,
+        privacyAccepted: true,
+        consentVersion: String(legal.consentVersion || '2026-09-18'),
+        policyVersion: String(legal.policyVersion || 'https://barboroda.com/policy'),
+        acceptedAt: Date.now(),
+      },
       subtotal,
       total,
       status: 'created',
@@ -474,7 +493,7 @@ app.get('/api/debug/iiko-raw', async (req, res) => {
 async function start() {
   await db.read();
   
-  const menuLoaded = await fetchIikoMenu();
+  const menuLoaded = await refreshIikoMenu();
   if (!menuLoaded) {
     db.data.menu = FALLBACK;
     await db.write();
@@ -484,6 +503,11 @@ async function start() {
   app.listen(PORT, () => {
     console.log(`[server] listening on http://localhost:${PORT}`);
   });
+
+  const menuRefreshTimer = setInterval(() => {
+    refreshIikoMenu().catch(error => console.error('[iiko] scheduled menu refresh failed:', error.message));
+  }, 5 * 60 * 1000);
+  menuRefreshTimer.unref();
 }
 
 start().catch(err => {

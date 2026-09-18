@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "node test/delivery-zones.test.js && node --check server.js"
+    "test": "node test/delivery-zones.test.js && node test/iiko-menu.test.js && node test/frontend-contract.test.js && node --check server.js"
   },
   "keywords": [],
   "author": "",
