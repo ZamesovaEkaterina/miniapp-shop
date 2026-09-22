@@ -21,11 +21,18 @@ const { findDeliveryZone, loadDeliveryZones } = require('./lib/delivery-zones');
 const { mapExternalMenu } = require('./lib/iiko-menu');
 
 const deliveryZones = loadDeliveryZones(path.join(__dirname, 'data', 'delivery-zones.geojson'));
+const PUBLIC_DEMO_MODE = process.env.PUBLIC_DEMO_MODE !== 'false';
 
 const app = express();
 app.disable('x-powered-by');
 app.use(cors());
 app.use(express.json({ limit: '100kb' }));
+app.use((req, res, next) => {
+  if (req.path === '/' || req.path.endsWith('.html')) {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+  }
+  next();
+});
 app.use(express.static('public'));
 
 const db = new Low(new JSONFile('.db.json'), { users: {}, orders: [], menu: { categories: [], products: [] } });
@@ -227,6 +234,12 @@ const FALLBACK = {
 // ===== API ENDPOINTS =====
 
 app.post('/api/bootstrap', async (req, res) => {
+  if (PUBLIC_DEMO_MODE) {
+    const menu = db.data.menu?.products?.length ? db.data.menu : FALLBACK;
+    res.set('Cache-Control', 'no-store');
+    return res.json({ user: null, categories: menu.categories, products: menu.products, orders: [], demoMode: true });
+  }
+
   const { initData } = req.body || {};
   let user = null;
 
@@ -264,6 +277,9 @@ app.get('/api/menu', async (req, res) => {
 });
 
 app.post('/api/delivery/quote', async (req, res) => {
+  if (PUBLIC_DEMO_MODE) {
+    return res.status(503).json({ available: false, error: 'Проверка реальных адресов отключена в тестовом режиме' });
+  }
   try {
     const quote = await quoteDelivery(req.body?.address);
     res.json(quote);
@@ -274,6 +290,9 @@ app.post('/api/delivery/quote', async (req, res) => {
 });
 
 app.post('/api/orders/mine', async (req, res) => {
+  if (PUBLIC_DEMO_MODE) {
+    return res.status(503).json({ orders: [], error: 'Профиль отключён в тестовом режиме' });
+  }
   try {
     const user = getTelegramUser(req.body?.initData);
     const orders = db.data.orders
@@ -288,6 +307,9 @@ app.post('/api/orders/mine', async (req, res) => {
 
 app.post('/api/orders', async (req, res) => {
   try {
+    if (PUBLIC_DEMO_MODE) {
+      return res.status(503).json({ ok: false, error: 'Приём заказов отключён в тестовом режиме' });
+    }
     if (!process.env.ORDER_CHAT_ID && process.env.IIKO_ORDER_ENABLED !== 'true') {
       return res.status(503).json({ ok: false, error: 'Приём заказов ещё настраивается. Попробуйте чуть позже' });
     }
@@ -433,6 +455,9 @@ async function notifyOrderChat(order) {
 }
 
 app.post('/api/whoami', (req, res) => {
+  if (PUBLIC_DEMO_MODE) {
+    return res.status(503).json({ ok: false, error: 'Telegram-профиль отключён в тестовом режиме' });
+  }
   const { initData } = req.body || {};
   const v = validateInitData(initData);
   if (!v.ok) return res.status(401).json({ ok: false, error: 'initData invalid' });
