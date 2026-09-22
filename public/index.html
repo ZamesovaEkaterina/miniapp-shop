@@ -4,110 +4,439 @@
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
   <meta name="color-scheme" content="dark"/>
-  <title>Бар Борода — доставка</title>
-  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <title>Бар Борода — тестовая витрина</title>
   <style>
-    :root { color-scheme:dark; --bg:#0c0c0d; --surface:#171719; --surface-2:#232326; --line:#343438; --text:#f7f4ef; --muted:#aaa7a2; --accent:#8b5bd6; --accent-strong:#7040bd; --ok:#70d58b; --error:#ff8b8b; --dock-height:148px; }
+    :root {
+      color-scheme: dark;
+      --bg:#0c0c0d;
+      --surface:#171719;
+      --surface-2:#232326;
+      --line:#343438;
+      --text:#f7f4ef;
+      --muted:#aaa7a2;
+      --accent:#8b5bd6;
+      --accent-strong:#7040bd;
+      --warning:#ffd28a;
+      --dock-height:148px;
+    }
     * { box-sizing:border-box; }
     html,body { min-height:100%; background:var(--bg); color:var(--text); }
-    body { font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif; margin:0; padding-bottom:calc(var(--dock-height) + env(safe-area-inset-bottom)); }
-    button,select,input { font:inherit; } button { cursor:pointer; }
-    header { position:sticky; top:0; z-index:20; background:rgba(12,12,13,.96); border-bottom:1px solid var(--line); padding:14px 16px; backdrop-filter:blur(12px); }
-    header strong { font-size:18px; } #tg-hint { margin-top:3px; font-size:12px; color:var(--muted); }
+    body {
+      font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+      margin:0;
+      padding-bottom:calc(var(--dock-height) + env(safe-area-inset-bottom));
+    }
+    button { font:inherit; cursor:pointer; }
+    header {
+      position:sticky;
+      top:0;
+      z-index:20;
+      padding:14px 16px;
+      background:rgba(12,12,13,.96);
+      border-bottom:1px solid var(--line);
+      backdrop-filter:blur(12px);
+    }
+    header strong { font-size:18px; }
+    #app-hint { margin-top:3px; font-size:12px; color:var(--muted); }
+    .demo-notice {
+      margin:14px 16px 2px;
+      padding:12px 14px;
+      border:1px solid #725222;
+      border-radius:12px;
+      background:#2b2114;
+      color:var(--warning);
+      font-size:13px;
+      line-height:1.4;
+    }
     .row { display:flex; gap:12px; flex-wrap:wrap; padding:12px 16px; }
-    #categories { flex-wrap:nowrap; overflow-x:auto; scrollbar-width:none; } #categories::-webkit-scrollbar { display:none; }
-    .card { border:1px solid var(--line); background:var(--surface); border-radius:14px; overflow:hidden; width:calc(50% - 6px); min-width:0; }
-    .card-body { padding:12px; } .card h4 { margin:0 0 7px; font-size:16px; line-height:1.22; } .price { font-weight:750; }
+    #categories { flex-wrap:nowrap; overflow-x:auto; scrollbar-width:none; }
+    #categories::-webkit-scrollbar { display:none; }
+    .card {
+      width:calc(50% - 6px);
+      min-width:0;
+      overflow:hidden;
+      border:1px solid var(--line);
+      border-radius:14px;
+      background:var(--surface);
+    }
+    .card-body { padding:12px; }
+    .card h4 { margin:0 0 7px; font-size:16px; line-height:1.22; }
+    .price { font-weight:750; }
     .category-name,.muted { color:var(--muted); font-size:12px; }
-    .product-image { display:block; width:100%; aspect-ratio:4/3; object-fit:cover; background:var(--surface-2); }
-    .product-placeholder { display:grid; place-items:center; width:100%; aspect-ratio:4/3; background:linear-gradient(135deg,#242126,#171719); font-size:34px; }
+    .product-image {
+      display:block;
+      width:100%;
+      aspect-ratio:4/3;
+      object-fit:cover;
+      background:var(--surface-2);
+    }
+    .product-placeholder {
+      display:grid;
+      place-items:center;
+      width:100%;
+      aspect-ratio:4/3;
+      background:linear-gradient(135deg,#242126,#171719);
+      font-size:34px;
+    }
     .actions { display:flex; gap:8px; margin-top:10px; }
-    .pill { border:1px solid var(--line); background:var(--surface-2); color:var(--text); border-radius:999px; padding:8px 12px; white-space:nowrap; }
+    .pill {
+      padding:8px 12px;
+      border:1px solid var(--line);
+      border-radius:999px;
+      background:var(--surface-2);
+      color:var(--text);
+      white-space:nowrap;
+    }
     .pill:active { transform:scale(.98); }
-    .primary { width:100%; padding:14px; border:0; border-radius:12px; background:var(--accent); color:#fff; font-weight:750; }
-    .primary:disabled { opacity:.45; cursor:not-allowed; } .hidden { display:none !important; }
-    label { display:block; margin:12px 0 5px; font-size:14px; }
-    select,input { width:100%; padding:13px; border:1px solid var(--line); border-radius:10px; background:var(--surface); color:var(--text); font-size:16px; }
-    input::placeholder { color:#77757a; }
-    .delivery-status { margin:10px 0; padding:11px; border-radius:9px; background:var(--surface-2); color:var(--muted); font-size:14px; line-height:1.35; }
-    .delivery-status.ok { color:var(--ok); background:#13261a; } .delivery-status.error { color:var(--error); background:#2c1719; }
-    #screen-checkout,#screen-profile { padding:18px 16px 26px; } #screen-checkout h3,#screen-profile h3 { margin-top:0; font-size:26px; }
-    .legal { margin:18px 0; display:grid; gap:12px; } .legal label { display:flex; align-items:flex-start; gap:10px; margin:0; color:var(--muted); font-size:13px; line-height:1.35; }
-    .legal input { width:22px; height:22px; margin:0; flex:0 0 22px; accent-color:var(--accent); } a { color:#c7a7fa; }
-    .cart { position:fixed; z-index:30; bottom:calc(60px + env(safe-area-inset-bottom)); left:0; right:0; min-height:68px; border-top:1px solid var(--line); background:rgba(23,23,25,.98); padding:9px 14px; display:grid; grid-template-columns:1fr auto auto; gap:10px; align-items:center; backdrop-filter:blur(12px); }
-    .cart-summary { min-width:0; } .cart-total { white-space:nowrap; font-weight:750; } .cart .actions { margin:0; }
-    nav { position:fixed; z-index:31; bottom:0; left:0; right:0; height:calc(60px + env(safe-area-inset-bottom)); padding:7px 10px calc(7px + env(safe-area-inset-bottom)); display:grid; grid-template-columns:repeat(3,1fr); gap:7px; border-top:1px solid var(--line); background:rgba(12,12,13,.98); backdrop-filter:blur(12px); }
-    nav button { border:0; border-radius:10px; background:var(--surface-2); color:var(--text); padding:8px 5px; font-size:13px; } nav button.active { background:var(--accent-strong); color:#fff; }
-    .modal { position:fixed; z-index:100; inset:0; display:flex; align-items:flex-end; background:rgba(0,0,0,.72); padding-top:40px; }
-    .modal-panel { position:relative; width:100%; max-height:88vh; overflow-y:auto; border-radius:22px 22px 0 0; background:var(--surface); border:1px solid var(--line); padding-bottom:calc(20px + env(safe-area-inset-bottom)); }
-    .modal-panel img { width:100%; max-height:42vh; object-fit:cover; border-radius:21px 21px 0 0; } .modal-content { padding:18px; } .modal-content h2 { margin:0 44px 8px 0; }
+    .hidden { display:none !important; }
+    #screen-checkout,#screen-profile { padding:18px 16px 26px; }
+    #screen-checkout h3,#screen-profile h3 { margin-top:0; font-size:26px; }
+    .demo-panel {
+      padding:18px;
+      border:1px solid var(--line);
+      border-radius:14px;
+      background:var(--surface);
+      line-height:1.5;
+    }
+    .demo-panel h4 { margin:0 0 10px; }
+    .demo-panel p { margin:8px 0; color:var(--muted); }
+    .cart {
+      position:fixed;
+      z-index:30;
+      bottom:calc(60px + env(safe-area-inset-bottom));
+      left:0;
+      right:0;
+      min-height:68px;
+      display:grid;
+      grid-template-columns:1fr auto auto;
+      gap:10px;
+      align-items:center;
+      padding:9px 14px;
+      border-top:1px solid var(--line);
+      background:rgba(23,23,25,.98);
+      backdrop-filter:blur(12px);
+    }
+    .cart-total { white-space:nowrap; font-weight:750; }
+    .cart .actions { margin:0; }
+    nav {
+      position:fixed;
+      z-index:31;
+      bottom:0;
+      left:0;
+      right:0;
+      height:calc(60px + env(safe-area-inset-bottom));
+      display:grid;
+      grid-template-columns:repeat(3,1fr);
+      gap:7px;
+      padding:7px 10px calc(7px + env(safe-area-inset-bottom));
+      border-top:1px solid var(--line);
+      background:rgba(12,12,13,.98);
+      backdrop-filter:blur(12px);
+    }
+    nav button {
+      padding:8px 5px;
+      border:0;
+      border-radius:10px;
+      background:var(--surface-2);
+      color:var(--text);
+      font-size:13px;
+    }
+    nav button.active { background:var(--accent-strong); color:#fff; }
+    .modal {
+      position:fixed;
+      z-index:100;
+      inset:0;
+      display:flex;
+      align-items:flex-end;
+      padding-top:40px;
+      background:rgba(0,0,0,.72);
+    }
+    .modal-panel {
+      position:relative;
+      width:100%;
+      max-height:88vh;
+      overflow-y:auto;
+      padding-bottom:calc(20px + env(safe-area-inset-bottom));
+      border:1px solid var(--line);
+      border-radius:22px 22px 0 0;
+      background:var(--surface);
+    }
+    .modal-panel img {
+      width:100%;
+      max-height:42vh;
+      object-fit:cover;
+      border-radius:21px 21px 0 0;
+    }
+    .modal-content { padding:18px; }
+    .modal-content h2 { margin:0 44px 8px 0; }
     .modal-description { color:var(--muted); line-height:1.48; white-space:pre-line; }
-    .modal-close { position:absolute; z-index:2; top:12px; right:12px; width:38px; height:38px; border:1px solid var(--line); border-radius:50%; background:rgba(12,12,13,.88); color:#fff; font-size:24px; line-height:1; }
+    .modal-close {
+      position:absolute;
+      z-index:2;
+      top:12px;
+      right:12px;
+      width:38px;
+      height:38px;
+      border:1px solid var(--line);
+      border-radius:50%;
+      background:rgba(12,12,13,.88);
+      color:#fff;
+      font-size:24px;
+      line-height:1;
+    }
+    .primary {
+      width:100%;
+      padding:14px;
+      border:0;
+      border-radius:12px;
+      background:var(--accent);
+      color:#fff;
+      font-weight:750;
+    }
     .empty { padding:24px 16px; color:var(--muted); }
-    @media (min-width:680px) { .card{width:calc(33.333% - 8px)} .modal{align-items:center;justify-content:center;padding:24px} .modal-panel{max-width:520px;border-radius:22px} }
+    @media (min-width:680px) {
+      .card { width:calc(33.333% - 8px); }
+      .modal { align-items:center; justify-content:center; padding:24px; }
+      .modal-panel { max-width:520px; border-radius:22px; }
+    }
     @keyframes pulse { 0%,100%{opacity:.3} 50%{opacity:1} }
   </style>
 </head>
 <body>
   <div id="loadingScreen" style="position:fixed;inset:0;background:linear-gradient(135deg,#171719 0%,#4b286f 100%);display:flex;align-items:center;justify-content:center;z-index:9999">
-    <div style="text-align:center;color:white"><div style="font-size:64px;margin-bottom:18px">🍔</div><h2 style="margin:0;font-size:28px">Бар Борода</h2><p style="margin:12px 0 0;opacity:.8">Загружаем меню…</p><div style="margin-top:26px;display:flex;gap:9px;justify-content:center"><i style="width:9px;height:9px;background:white;border-radius:50%;animation:pulse 1.5s infinite"></i><i style="width:9px;height:9px;background:white;border-radius:50%;animation:pulse 1.5s infinite .3s"></i><i style="width:9px;height:9px;background:white;border-radius:50%;animation:pulse 1.5s infinite .6s"></i></div></div>
+    <div style="text-align:center;color:white">
+      <div style="font-size:64px;margin-bottom:18px">🍔</div>
+      <h2 style="margin:0;font-size:28px">Бар Борода</h2>
+      <p style="margin:12px 0 0;opacity:.8">Загружаем тестовое меню…</p>
+    </div>
   </div>
+
   <div id="app" style="display:none">
-    <header><strong>Бар Борода — доставка</strong><div id="tg-hint"></div></header>
+    <header>
+      <strong>Бар Борода — тестовая витрина</strong>
+      <div id="app-hint">Персональные данные не собираются</div>
+    </header>
+
+    <div class="demo-notice">
+      Тестовый режим. Доставка ещё не запущена. Не вводите здесь имя, телефон или адрес — приложение показывает только меню и будущий интерфейс.
+    </div>
+
     <main>
-      <div id="screen-catalog"><div class="row" id="categories"></div><div class="row" id="products"></div></div>
-      <div id="screen-checkout" class="hidden">
+      <section id="screen-catalog">
+        <div class="row" id="categories"></div>
+        <div class="row" id="products"></div>
+      </section>
+
+      <section id="screen-checkout" class="hidden">
         <h3>Оформление</h3>
-        <label for="delivery-method">Как получить заказ</label><select id="delivery-method"><option value="courier">Курьер</option><option value="pickup">Самовывоз</option></select>
-        <label for="customer-name">Ваше имя</label><input id="customer-name" autocomplete="name" placeholder="Имя"/>
-        <label for="customer-phone">Телефон</label><input id="customer-phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="+7 999 123-45-67"/>
-        <div id="address-wrap"><label for="address">Адрес доставки</label><input id="address" autocomplete="street-address" placeholder="Раменское, улица, дом"/><button id="btn-check-address" class="pill" type="button" style="margin-top:8px">Проверить адрес</button><div id="delivery-status" class="delivery-status">Введите адрес — мы автоматически определим зону и стоимость.</div></div>
-        <h4>Итого: <span id="total-sum">0</span> ₽</h4>
-        <div class="legal">
-          <label><input id="consent-personal" type="checkbox"/><span>Я даю <a href="/consent.html" target="_blank" rel="noopener">согласие на обработку персональных данных</a>.</span></label>
-          <label><input id="consent-policy" type="checkbox"/><span>Я ознакомлен(а) с <a href="https://barboroda.com/policy" target="_blank" rel="noopener">Политикой обработки персональных данных</a>.</span></label>
+        <div class="demo-panel">
+          <h4>Заказы временно недоступны</h4>
+          <p>Корзину можно собрать для проверки меню и итоговой суммы.</p>
+          <p>Имя, телефон, адрес, Telegram-профиль и согласия на этом тестовом сервере не запрашиваются и не отправляются.</p>
+          <p><strong>Товаров:</strong> <span id="demo-cart-count">0</span></p>
+          <p><strong>Сумма блюд:</strong> <span id="total-sum">0</span> ₽</p>
         </div>
-        <button id="btn-place" class="primary" disabled>Отправить заказ</button>
-      </div>
-      <div id="screen-profile" class="hidden"><h3>Личный кабинет</h3><div id="profile"></div><h4>Заказы</h4><div id="orders"></div></div>
+      </section>
+
+      <section id="screen-profile" class="hidden">
+        <h3>Личный кабинет</h3>
+        <div class="demo-panel">
+          <h4>Профиль отключён в тестовом режиме</h4>
+          <p>Telegram-данные не передаются серверу. Профиль и история заказов появятся после переноса на российскую инфраструктуру.</p>
+        </div>
+      </section>
     </main>
-    <div class="cart" id="cart-bar"><div class="cart-summary"><strong>Корзина:</strong> <span id="cart-count">0</span> поз.</div><div class="cart-total"><span id="cart-sum">0</span> ₽</div><div class="actions"><button id="to-checkout" class="pill">Оформить</button></div></div>
-    <nav><button id="tab-catalog" class="active">Каталог</button><button id="tab-checkout">Оформление</button><button id="tab-profile">Профиль</button></nav>
+
+    <div class="cart" id="cart-bar">
+      <div><strong>Корзина:</strong> <span id="cart-count">0</span> поз.</div>
+      <div class="cart-total"><span id="cart-sum">0</span> ₽</div>
+      <div class="actions"><button id="to-checkout" class="pill">Посмотреть</button></div>
+    </div>
+    <nav>
+      <button id="tab-catalog" class="active">Каталог</button>
+      <button id="tab-checkout">Корзина</button>
+      <button id="tab-profile">Профиль</button>
+    </nav>
   </div>
-  <div id="product-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title"><div class="modal-panel"><button id="modal-close" class="modal-close" aria-label="Закрыть">×</button><div id="modal-media"></div><div class="modal-content"><h2 id="modal-title"></h2><div id="modal-category" class="muted"></div><p id="modal-description" class="modal-description"></p><h3><span id="modal-price"></span> ₽</h3><button id="modal-add" class="primary">Добавить в корзину</button></div></div></div>
+
+  <div id="product-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal-panel">
+      <button id="modal-close" class="modal-close" aria-label="Закрыть">×</button>
+      <div id="modal-media"></div>
+      <div class="modal-content">
+        <h2 id="modal-title"></h2>
+        <div id="modal-category" class="muted"></div>
+        <p id="modal-description" class="modal-description"></p>
+        <h3><span id="modal-price"></span> ₽</h3>
+        <button id="modal-add" class="primary">Добавить в тестовую корзину</button>
+      </div>
+    </div>
+  </div>
+
   <script>
-    const tg=window.Telegram?.WebApp;
-    if(tg){tg.expand();tg.setHeaderColor?.('#0c0c0d');tg.setBackgroundColor?.('#0c0c0d');tg.setBottomBarColor?.('#0c0c0d');document.getElementById('tg-hint').textContent='Mini App открыт внутри Telegram';}
-    else document.getElementById('tg-hint').textContent='Доставка работает и вне Telegram';
-    const state={user:null,categories:[],products:[],cart:[],deliveryFee:0,deliveryQuote:null,modalProduct:null};
-    const screens={catalog:document.getElementById('screen-catalog'),checkout:document.getElementById('screen-checkout'),profile:document.getElementById('screen-profile')};
-    const tabs={catalog:document.getElementById('tab-catalog'),checkout:document.getElementById('tab-checkout'),profile:document.getElementById('tab-profile')};
-    function show(name){Object.entries(screens).forEach(([key,el])=>el.classList.toggle('hidden',key!==name));Object.entries(tabs).forEach(([key,el])=>el.classList.toggle('active',key===name));window.scrollTo({top:0,behavior:'smooth'});}
-    tabs.catalog.onclick=()=>show('catalog');tabs.checkout.onclick=()=>show('checkout');tabs.profile.onclick=()=>show('profile');
-    async function loadMenu(){const response=await fetch('/api/menu',{cache:'no-store'});if(!response.ok)throw new Error('Не удалось загрузить меню');const menu=await response.json();state.categories=menu.categories||[];state.products=menu.products||[];renderCategories();renderProducts(state.products);}
-    async function bootstrap(){const initData=tg?.initData||'';try{const response=await fetch('/api/bootstrap',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({initData})});if(!response.ok)throw new Error('Не удалось открыть приложение');const data=await response.json();state.user=data.user;if(data.user?.first_name)document.getElementById('customer-name').value=data.user.first_name;state.categories=data.categories||[];state.products=data.products||[];renderCategories();renderProducts(state.products);renderProfile(data.user);renderOrders(data.orders||[]);}catch(error){console.error('Bootstrap error:',error);await loadMenu().catch(()=>{});}finally{document.getElementById('loadingScreen').style.display='none';document.getElementById('app').style.display='block';}}
-    function renderCategories(){const wrap=document.getElementById('categories');wrap.replaceChildren();const all=document.createElement('button');all.className='pill';all.textContent='Все';all.onclick=()=>renderProducts(state.products);wrap.appendChild(all);state.categories.forEach(category=>{const button=document.createElement('button');button.className='pill';button.textContent=category.name;button.onclick=()=>renderProducts(state.products.filter(product=>product.categoryId===category.id));wrap.appendChild(button);});}
-    function imageElement(product,className='product-image'){if(!product.imageUrl){const placeholder=document.createElement('div');placeholder.className='product-placeholder';placeholder.textContent='🍽️';return placeholder;}const image=document.createElement('img');image.className=className;image.src=product.imageUrl;image.alt=product.name;image.loading='lazy';image.onerror=()=>{const placeholder=document.createElement('div');placeholder.className='product-placeholder';placeholder.textContent='🍽️';image.replaceWith(placeholder);};return image;}
-    function renderProducts(list){const wrap=document.getElementById('products');wrap.replaceChildren();if(!list.length){const empty=document.createElement('div');empty.className='empty';empty.textContent='В этой категории пока нет доступных блюд.';wrap.appendChild(empty);return;}list.forEach(product=>{const card=document.createElement('article');card.className='card';card.tabIndex=0;card.appendChild(imageElement(product));const body=document.createElement('div');body.className='card-body';const title=document.createElement('h4');title.textContent=product.name;const price=document.createElement('div');price.className='price';price.textContent=`${product.price} ₽`;const category=document.createElement('div');category.className='category-name';category.textContent=product.categoryName||'';const actions=document.createElement('div');actions.className='actions';const add=document.createElement('button');add.className='pill';add.textContent='В корзину';add.onclick=event=>{event.stopPropagation();addToCart(product);};actions.appendChild(add);body.append(title,price,category,actions);card.appendChild(body);card.onclick=()=>openProduct(product);card.onkeydown=event=>{if(event.key==='Enter'||event.key===' ')openProduct(product);};wrap.appendChild(card);});}
-    const modal=document.getElementById('product-modal');
-    function openProduct(product){state.modalProduct=product;document.getElementById('modal-title').textContent=product.name;document.getElementById('modal-category').textContent=product.categoryName||'';document.getElementById('modal-description').textContent=product.description||'Состав блюда уточняется.';document.getElementById('modal-price').textContent=product.price;const media=document.getElementById('modal-media');media.replaceChildren(imageElement(product));modal.classList.remove('hidden');document.body.style.overflow='hidden';}
-    function closeProduct(){modal.classList.add('hidden');document.body.style.overflow='';state.modalProduct=null;}
-    document.getElementById('modal-close').onclick=closeProduct;modal.onclick=event=>{if(event.target===modal)closeProduct();};document.addEventListener('keydown',event=>{if(event.key==='Escape')closeProduct();});document.getElementById('modal-add').onclick=()=>{if(state.modalProduct)addToCart(state.modalProduct);closeProduct();};
-    function addToCart(product){const item=state.cart.find(value=>value.id===product.id);if(item)item.qty++;else state.cart.push({id:product.id,name:product.name,price:product.price,qty:1});updateCartBar();tg?.HapticFeedback?.impactOccurred('light');}
-    function updateCartBar(){const count=state.cart.reduce((sum,item)=>sum+item.qty,0);const sum=state.cart.reduce((total,item)=>total+item.qty*item.price,0)+state.deliveryFee;document.getElementById('cart-count').textContent=count;document.getElementById('cart-sum').textContent=sum;document.getElementById('total-sum').textContent=sum;}
-    const selectMethod=document.getElementById('delivery-method'),addressWrap=document.getElementById('address-wrap'),addressInput=document.getElementById('address'),deliveryStatus=document.getElementById('delivery-status'),checkAddressButton=document.getElementById('btn-check-address');
-    function recalcDelivery(){const isCourier=selectMethod.value==='courier';addressWrap.style.display=isCourier?'block':'none';state.deliveryQuote=isCourier?null:{available:true,zone:null,fee:0};state.deliveryFee=0;if(isCourier){deliveryStatus.className='delivery-status';deliveryStatus.textContent='Введите адрес — мы автоматически определим зону и стоимость.';}updateCartBar();}
-    selectMethod.onchange=recalcDelivery;recalcDelivery();addressInput.oninput=()=>{state.deliveryQuote=null;state.deliveryFee=0;deliveryStatus.className='delivery-status';deliveryStatus.textContent='Адрес изменён. Нажмите «Проверить адрес».';updateCartBar();};
-    async function checkAddress(){const address=addressInput.value.trim();if(!address){deliveryStatus.className='delivery-status error';deliveryStatus.textContent='Введите улицу и номер дома.';return null;}checkAddressButton.disabled=true;deliveryStatus.className='delivery-status';deliveryStatus.textContent='Проверяем адрес…';try{const response=await fetch('/api/delivery/quote',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({address})});const data=await response.json();if(!response.ok||!data.available)throw new Error(data.error||'Адрес находится вне зоны доставки');state.deliveryQuote=data;state.deliveryFee=data.fee;deliveryStatus.className='delivery-status ok';deliveryStatus.textContent=`${data.zoneName}: доставка ${data.fee} ₽. ${data.formattedAddress}`;updateCartBar();return data;}catch(error){state.deliveryQuote=null;state.deliveryFee=0;updateCartBar();deliveryStatus.className='delivery-status error';deliveryStatus.textContent=error.message;return null;}finally{checkAddressButton.disabled=false;}}
-    checkAddressButton.onclick=checkAddress;
-    const consentPersonal=document.getElementById('consent-personal'),consentPolicy=document.getElementById('consent-policy'),placeButton=document.getElementById('btn-place');
-    function updateConsent(){placeButton.disabled=!(consentPersonal.checked&&consentPolicy.checked);}consentPersonal.onchange=updateConsent;consentPolicy.onchange=updateConsent;
-    placeButton.onclick=async()=>{const initData=tg?.initData||'';if(!state.cart.length){alert('Корзина пуста');return;}if(!consentPersonal.checked||!consentPolicy.checked){alert('Подтвердите оба согласия');return;}if(selectMethod.value==='courier'&&!state.deliveryQuote){const quote=await checkAddress();if(!quote)return;}placeButton.disabled=true;placeButton.textContent='Отправляем…';try{const payload={initData,items:state.cart,customer:{name:document.getElementById('customer-name').value,phone:document.getElementById('customer-phone').value},delivery:{method:selectMethod.value,address:addressInput.value||null},legal:{personalDataConsent:true,privacyAccepted:true,consentVersion:'2026-09-18',policyVersion:'https://barboroda.com/policy'}};const response=await fetch('/api/orders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const data=await response.json();if(data.ok){alert('Заказ создан #'+data.orderNumber);state.cart=[];state.deliveryFee=0;consentPersonal.checked=false;consentPolicy.checked=false;updateCartBar();if(tg?.initData){show('profile');await loadOrders();}}else alert('Ошибка: '+data.error);}catch(error){alert('Не удалось отправить заказ. Попробуйте ещё раз.');}finally{placeButton.textContent='Отправить заказ';updateConsent();}};
+    const state={categories:[],products:[],cart:[],modalProduct:null};
+    const screens={
+      catalog:document.getElementById('screen-catalog'),
+      checkout:document.getElementById('screen-checkout'),
+      profile:document.getElementById('screen-profile')
+    };
+    const tabs={
+      catalog:document.getElementById('tab-catalog'),
+      checkout:document.getElementById('tab-checkout'),
+      profile:document.getElementById('tab-profile')
+    };
+
+    function show(name){
+      Object.entries(screens).forEach(([key,element])=>element.classList.toggle('hidden',key!==name));
+      Object.entries(tabs).forEach(([key,element])=>element.classList.toggle('active',key===name));
+      window.scrollTo({top:0,behavior:'smooth'});
+    }
+    tabs.catalog.onclick=()=>show('catalog');
+    tabs.checkout.onclick=()=>show('checkout');
+    tabs.profile.onclick=()=>show('profile');
     document.getElementById('to-checkout').onclick=()=>show('checkout');
-    async function loadOrders(){if(!tg?.initData)return renderOrders([]);const response=await fetch('/api/orders/mine',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({initData:tg.initData})});const data=await response.json();renderOrders(data.orders||[]);}
-    function renderProfile(user){const element=document.getElementById('profile');element.replaceChildren();const greeting=document.createElement('div');greeting.textContent=user?`Привет, ${user.first_name||'друг'}!`:'Гость';element.appendChild(greeting);}
-    function renderOrders(orders){const element=document.getElementById('orders');element.replaceChildren();if(!orders.length){const empty=document.createElement('div');empty.className='muted';empty.textContent='Здесь появятся ваши заказы.';element.appendChild(empty);return;}orders.forEach(order=>{const card=document.createElement('div');card.className='card';card.style.width='100%';const body=document.createElement('div');body.className='card-body';const main=document.createElement('div');main.textContent=`№${order.number} — ${order.total} ₽ — ${order.status}`;const date=document.createElement('div');date.className='muted';date.textContent=new Date(order.createdAt).toLocaleString();body.append(main,date);card.appendChild(body);element.appendChild(card);});}
-    document.addEventListener('visibilitychange',()=>{if(!document.hidden)loadMenu().catch(()=>{});});setInterval(()=>loadMenu().catch(()=>{}),5*60*1000);bootstrap().catch(error=>alert('Ошибка загрузки: '+error.message));
+
+    async function loadMenu(){
+      const response=await fetch('/api/menu',{cache:'no-store'});
+      if(!response.ok) throw new Error('Не удалось загрузить меню');
+      const menu=await response.json();
+      state.categories=menu.categories||[];
+      state.products=menu.products||[];
+      renderCategories();
+      renderProducts(state.products);
+    }
+
+    function renderCategories(){
+      const wrap=document.getElementById('categories');
+      wrap.replaceChildren();
+      const all=document.createElement('button');
+      all.className='pill';
+      all.textContent='Все';
+      all.onclick=()=>renderProducts(state.products);
+      wrap.appendChild(all);
+      state.categories.forEach(category=>{
+        const button=document.createElement('button');
+        button.className='pill';
+        button.textContent=category.name;
+        button.onclick=()=>renderProducts(state.products.filter(product=>product.categoryId===category.id));
+        wrap.appendChild(button);
+      });
+    }
+
+    function imageElement(product){
+      if(!product.imageUrl){
+        const placeholder=document.createElement('div');
+        placeholder.className='product-placeholder';
+        placeholder.textContent='🍽️';
+        return placeholder;
+      }
+      const image=document.createElement('img');
+      image.className='product-image';
+      image.src=product.imageUrl;
+      image.alt=product.name;
+      image.loading='lazy';
+      image.onerror=()=>{
+        const placeholder=document.createElement('div');
+        placeholder.className='product-placeholder';
+        placeholder.textContent='🍽️';
+        image.replaceWith(placeholder);
+      };
+      return image;
+    }
+
+    function renderProducts(list){
+      const wrap=document.getElementById('products');
+      wrap.replaceChildren();
+      if(!list.length){
+        const empty=document.createElement('div');
+        empty.className='empty';
+        empty.textContent='В этой категории пока нет доступных блюд.';
+        wrap.appendChild(empty);
+        return;
+      }
+      list.forEach(product=>{
+        const card=document.createElement('article');
+        card.className='card';
+        card.tabIndex=0;
+        card.appendChild(imageElement(product));
+        const body=document.createElement('div');
+        body.className='card-body';
+        const title=document.createElement('h4');
+        title.textContent=product.name;
+        const price=document.createElement('div');
+        price.className='price';
+        price.textContent=`${product.price} ₽`;
+        const category=document.createElement('div');
+        category.className='category-name';
+        category.textContent=product.categoryName||'';
+        const actions=document.createElement('div');
+        actions.className='actions';
+        const add=document.createElement('button');
+        add.className='pill';
+        add.textContent='В тестовую корзину';
+        add.onclick=event=>{event.stopPropagation();addToCart(product);};
+        actions.appendChild(add);
+        body.append(title,price,category,actions);
+        card.appendChild(body);
+        card.onclick=()=>openProduct(product);
+        card.onkeydown=event=>{if(event.key==='Enter'||event.key===' ')openProduct(product);};
+        wrap.appendChild(card);
+      });
+    }
+
+    const modal=document.getElementById('product-modal');
+    function openProduct(product){
+      state.modalProduct=product;
+      document.getElementById('modal-title').textContent=product.name;
+      document.getElementById('modal-category').textContent=product.categoryName||'';
+      document.getElementById('modal-description').textContent=product.description||'Состав блюда уточняется.';
+      document.getElementById('modal-price').textContent=product.price;
+      const media=document.getElementById('modal-media');
+      media.replaceChildren(imageElement(product));
+      modal.classList.remove('hidden');
+      document.body.style.overflow='hidden';
+    }
+    function closeProduct(){
+      modal.classList.add('hidden');
+      document.body.style.overflow='';
+      state.modalProduct=null;
+    }
+    document.getElementById('modal-close').onclick=closeProduct;
+    modal.onclick=event=>{if(event.target===modal)closeProduct();};
+    document.addEventListener('keydown',event=>{if(event.key==='Escape')closeProduct();});
+    document.getElementById('modal-add').onclick=()=>{
+      if(state.modalProduct) addToCart(state.modalProduct);
+      closeProduct();
+    };
+
+    function addToCart(product){
+      const item=state.cart.find(value=>value.id===product.id);
+      if(item) item.qty++;
+      else state.cart.push({id:product.id,name:product.name,price:product.price,qty:1});
+      updateCartBar();
+    }
+    function updateCartBar(){
+      const count=state.cart.reduce((sum,item)=>sum+item.qty,0);
+      const sum=state.cart.reduce((total,item)=>total+item.qty*item.price,0);
+      document.getElementById('cart-count').textContent=count;
+      document.getElementById('demo-cart-count').textContent=count;
+      document.getElementById('cart-sum').textContent=sum;
+      document.getElementById('total-sum').textContent=sum;
+    }
+
+    async function startDemo(){
+      try {
+        await loadMenu();
+      } catch(error) {
+        console.error('Menu load error:',error);
+      } finally {
+        document.getElementById('loadingScreen').style.display='none';
+        document.getElementById('app').style.display='block';
+      }
+    }
+    document.addEventListener('visibilitychange',()=>{if(!document.hidden)loadMenu().catch(()=>{});});
+    setInterval(()=>loadMenu().catch(()=>{}),5*60*1000);
+    startDemo();
   </script>
 </body>
 </html>
